@@ -3,6 +3,9 @@
   "version": "0.1.1",
   "description": "Render a Google Calendar into HTML you control. Template-driven, locale-aware, consent-friendly.",
   "type": "module",
+  "scripts": {
+    "version": "node scripts/stamp-banners.mjs && git add src/"
+  },
   "main": "./src/index.js",
   "module": "./src/index.js",
   "exports": {
