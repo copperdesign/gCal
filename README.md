@@ -1,5 +1,9 @@
 # @copperdesign/gcal
 
+[![npm version](https://img.shields.io/npm/v/@copperdesign/gcal.svg)](https://www.npmjs.com/package/@copperdesign/gcal)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/@copperdesign/gcal)](https://bundlephobia.com/package/@copperdesign/gcal)
+[![license](https://img.shields.io/npm/l/@copperdesign/gcal.svg)](./LICENSE)
+
 Render a public Google Calendar into HTML you control. Template-driven, locale-aware, consent-friendly. Zero dependencies, ESM only.
 
 ```bash
@@ -211,6 +215,42 @@ Modern evergreens. Requires native `fetch`, `Intl.DateTimeFormat`, `<template>`,
 
 This module is the modern successor to a pair of older scripts — a 2018 jQuery plugin and a later vanilla rewrite — that rendered the same Google Calendar pattern in client projects. The current rewrite splits rendering from data, drops the bundled Steven Levithan dateFormat library in favor of `Intl`, and makes consent gating a contract rather than a built-in.
 
+## Contributing
+
+PRs and issues welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup,
+the PR workflow, and what fits the scope of the module. The repo follows
+the [Contributor Covenant](CODE_OF_CONDUCT.md).
+
+Quick version: fork, branch off `master`, exercise your change against
+`test/index.html` (offline) and `demo/index.html` (live API) in at least
+one non-Chromium browser, open a PR. I (@copperdesign) review and merge.
+
+## Releasing (maintainer notes)
+
+The package is published to npm as
+[`@copperdesign/gcal`](https://www.npmjs.com/package/@copperdesign/gcal)
+and installable in any project with:
+
+```sh
+npm install @copperdesign/gcal
+```
+
+For future releases:
+
+```sh
+npm version patch        # or minor / major — bumps package.json, commits, tags vX.Y.Z
+git push --follow-tags
+gh release create vX.Y.Z --generate-notes
+```
+
+The `release.yml` GitHub Actions workflow handles the rest: it
+smoke-checks every `src/*.js`, verifies the tag matches `package.json`,
+confirms every `exports` subpath resolves, and publishes to npm with
+provenance. Requires an `NPM_TOKEN` repo secret minted from the
+`copperdesign` npm account.
+
 ## License
 
-MIT © Christian Fillies
+MIT — see [LICENSE](./LICENSE).
+
+Created by [Christian Fillies](https://www.christianfillies.com).

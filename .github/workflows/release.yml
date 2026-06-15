@@ -1,0 +1,105 @@
+# Publish to npm when a GitHub Release is published.
+#
+# The flow: bump the version in package.json, commit, tag (`v0.2.0`),
+# push, then draft + publish a Release on GitHub. This workflow picks
+# up the `release: published` event, runs the smoke checks, and
+# publishes the tagged version to npm under the @copperdesign scope.
+#
+# Why "on release" and not "on tag push"?
+# - The release UI is where the changelog / notes live anyway, so it's
+#   the natural "I'm ready" signal.
+# - Drafting a release without publishing it lets you stage notes
+#   without triggering anything.
+# - It separates "tag exists" (cheap, reversible) from "shipped to npm"
+#   (public, irreversible).
+#
+# Setup (one time):
+# 1. Log in to npmjs.com as `copperdesign` (the personal account that
+#    owns the @copperdesign scope — NOT the Manolab org account).
+# 2. Profile → Access Tokens → Generate New Token → "Automation"
+#    (Granular tokens also work; give it publish access to
+#    @copperdesign/gcal and nothing else).
+# 3. In this repo: Settings → Secrets and variables → Actions →
+#    New repository secret → name `NPM_TOKEN`, value = the token above.
+# 4. First publish of a scoped package on a free npm plan requires
+#    `--access public`. That's already in package.json under
+#    `publishConfig`, so no extra flag needed.
+#
+# Provenance:
+# - `id-token: write` + `--provenance` produces a signed attestation
+#   that ties the published tarball to this specific workflow run on
+#   this commit. Visible on the npm package page; nothing for consumers
+#   to configure. Requires the repo to be public.
+
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    name: publish to npm
+    runs-on: ubuntu-latest
+
+    # Required for npm provenance — the workflow mints an OIDC token
+    # that npm verifies against the GitHub Actions issuer.
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Smoke checks before publishing — same guards as ci.yml, inlined
+      # so a release can't sneak past a broken parse. Cheaper than a
+      # workflow dependency and keeps the release job self-contained.
+      - name: parse check (all src/*.js)
+        run: |
+          set -e
+          for f in src/*.js; do
+            echo "checking $f"
+            node --check "$f"
+          done
+
+      - name: exports map subpaths resolve
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const fs = require('fs');
+            const entries = Object.values(pkg.exports).map(v =>
+              typeof v === 'string' ? v : v.import || v.default
+            );
+            let bad = false;
+            for (const entry of entries) {
+              const path = entry.replace(/^\.\//, '');
+              if (!fs.existsSync(path)) {
+                console.error('exports entry missing on disk:', entry);
+                bad = true;
+              }
+            }
+            if (bad) process.exit(1);
+          "
+
+      - name: tag matches package.json version
+        run: |
+          # release.tag_name is e.g. "v0.2.0" — strip the leading v and
+          # compare to package.json. Catches the "forgot to bump
+          # version" mistake before it produces a confusing 403 from
+          # npm.
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag ($tag) does not match package.json version ($pkg)" >&2
+            exit 1
+          fi
+
+      - name: publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

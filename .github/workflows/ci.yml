@@ -1,0 +1,89 @@
+# Smoke-test the module on every push / PR.
+#
+# This is a browser ES module with zero runtime dependencies — it can't be
+# fully imported in plain Node because it touches DOM APIs (<template>,
+# document, custom events, etc.). The CI's job is therefore narrow:
+# confirm every source file still parses as a valid ES module, and that
+# the package metadata is internally consistent. Catches the usual
+# drive-by regressions: stray syntax error, unbalanced template literal,
+# broken `exports` map subpath, etc.
+#
+# No `npm install` step — the package declares no dependencies. Matrix
+# runs the LTS line on the off chance a future syntax addition trips an
+# older parser.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  smoke:
+    name: smoke (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: parse check (all src/*.js)
+        run: |
+          # node --check on every source file. A single broken file
+          # should fail the job loudly, not silently skip.
+          set -e
+          for f in src/*.js; do
+            echo "checking $f"
+            node --check "$f"
+          done
+
+      - name: package.json is valid JSON
+        run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"
+
+      - name: exports map subpaths resolve
+        run: |
+          # Every entry in pkg.exports must point at a file that exists.
+          # This catches a deleted/renamed primitive that the exports map
+          # still advertises — a silent dist-time break for consumers.
+          node -e "
+            const pkg = require('./package.json');
+            const fs = require('fs');
+            const entries = Object.values(pkg.exports).map(v =>
+              typeof v === 'string' ? v : v.import || v.default
+            );
+            let bad = false;
+            for (const entry of entries) {
+              const path = entry.replace(/^\.\//, '');
+              if (!fs.existsSync(path)) {
+                console.error('exports entry missing on disk:', entry);
+                bad = true;
+              }
+            }
+            if (bad) process.exit(1);
+          "
+
+      - name: files allowlist points at real paths
+        run: |
+          # pkg.files is the npm publish allowlist. If an entry doesn't
+          # exist on disk we'd publish a tarball missing whatever the
+          # README promised — catch it now.
+          node -e "
+            const pkg = require('./package.json');
+            const fs = require('fs');
+            let bad = false;
+            for (const entry of pkg.files || []) {
+              if (!fs.existsSync(entry)) {
+                console.error('files entry missing on disk:', entry);
+                bad = true;
+              }
+            }
+            if (bad) process.exit(1);
+          "
