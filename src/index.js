@@ -1,3 +1,9 @@
+/*! gCal — v0.1.1 - 2026-06-15
+ * https://copperdesign.github.io/
+ *
+ * Copyright (c) 2026 Christian Fillies;
+ * Licensed under the MIT license */
+
 /**
  * @docs ../docs/index.md
  *
