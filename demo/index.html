@@ -79,15 +79,20 @@
 
   <script type="module">
     import { GCal } from '../src/index.js';
+    import easyCookieConsent from 'https://unpkg.com/@copperdesign/easy-cookie-consent@0.3/index.js';
 
-    // Trivial demo consent — localStorage flag, no real cookie banner.
-    const KEY = 'gcal-demo-consent';
+    // Real consent gate — the blessed pairing documented in README.
+    // onConsent fires once when consent is granted (here, by the CTA's
+    // optIn() call). Dispatching `consentchange` lets gCal re-render if
+    // a hypothetical global modal grants consent outside the CTA flow.
+    const ecc = easyCookieConsent({
+      // No global banner — gCal's CTA template is the per-embed consent UI.
+      showModal: false,
+      onConsent: () => document.dispatchEvent(new CustomEvent('consentchange')),
+    });
     const consent = {
-      check:   () => localStorage.getItem(KEY) === '1',
-      request: async () => {
-        localStorage.setItem(KEY, '1');
-        document.dispatchEvent(new CustomEvent('consentchange'));
-      },
+      check:   () => ecc.hasConsent('gcal'),
+      request: () => ecc.optIn('gcal'),
       ctaTemplate: '#gcal-cta',
     };
 

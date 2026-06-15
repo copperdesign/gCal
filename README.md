@@ -155,6 +155,10 @@ import { GCal } from '@copperdesign/gcal';
 import easyCookieConsent from '@copperdesign/easy-cookie-consent';
 
 const ecc = easyCookieConsent({
+  // easy-cookie-consent shows a global modal on load by default.
+  // If gCal's CTA template is your only consent UI, set this to false.
+  // Leave it true (default) to pair the global banner with the per-embed CTA.
+  showModal: false,
   // Re-render gCal when consent flips elsewhere on the page
   // (global modal, revoke link, …).
   onConsent: () => document.dispatchEvent(new CustomEvent('consentchange')),
