@@ -1,10 +1,10 @@
 # Contributing
 
 Thanks for the interest. This is a small, focused browser library — the
-modern successor to a pattern I've been shipping in client projects for
-years. Contributions that make it sharper, less surprising, or more useful
-to the next person dropping a Google Calendar into a hero or events list
-are welcome.
+modern successor to a pattern I've been shipping in production for years.
+Contributions that make it sharper, less surprising, or more useful to the
+next person dropping a Google Calendar into a hero or events list are
+welcome.
 
 ## Ownership and merging
 

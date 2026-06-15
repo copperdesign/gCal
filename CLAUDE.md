@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `@copperdesign/gcal` — a zero-dependency, ESM-only browser library that fetches events from the public Google Calendar v3 API and renders them into a consumer-supplied `<template>`. No build step, no framework.
 
-Successor to a pair of older scripts (a 2018 jQuery plugin and a later vanilla rewrite) that rendered the same Google Calendar pattern in client projects. The rewrite swaps jQuery + Steven Levithan dateFormat for native `fetch` + `Intl`, and turns consent gating from a built-in into a contract.
+Successor to a pair of older scripts (a 2018 jQuery plugin and a later vanilla rewrite) that rendered the same Google Calendar pattern in production. The rewrite swaps jQuery + Steven Levithan dateFormat for native `fetch` + `Intl`, and turns consent gating from a built-in into a contract.
 
 ## Running and testing
 
