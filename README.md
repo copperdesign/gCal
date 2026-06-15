@@ -146,6 +146,32 @@ new GCal({ /* …, */ consent }).mount();
 
 When consent is granted (synchronously or by `request()` resolving), the library fetches and renders. If a `consentchange` CustomEvent fires on `document` later (e.g. from a global cookie banner), it re-renders automatically.
 
+### With `@copperdesign/easy-cookie-consent`
+
+The recommended pairing — a zero-dependency, click-to-load consent gate built to the same shape as gCal. The adapter is three lines:
+
+```js
+import { GCal } from '@copperdesign/gcal';
+import easyCookieConsent from '@copperdesign/easy-cookie-consent';
+
+const ecc = easyCookieConsent({
+  // Re-render gCal when consent flips elsewhere on the page
+  // (global modal, revoke link, …).
+  onConsent: () => document.dispatchEvent(new CustomEvent('consentchange')),
+});
+
+new GCal({
+  // …,
+  consent: {
+    check:   () => ecc.hasConsent('gcal'),
+    request: () => ecc.optIn('gcal'),
+    ctaTemplate: '#gcal-cta',
+  },
+}).mount();
+```
+
+gCal stays provider-agnostic — easy-cookie-consent is opt-in, not bundled.
+
 ## State templates
 
 ```html
@@ -206,6 +232,97 @@ for (const event of items) {
   document.querySelector('#events').appendChild(renderTemplate(tpl, data));
 }
 ```
+
+## Recipe: the classic listing layout
+
+A common pattern — and the one this library was originally written against —
+is the date-pill listing: a coloured date block on the left, a stack of
+time / title / description / location on the right, and a "continuous-day"
+modifier that hides the date pill for back-to-back events on the same date.
+
+Three derived fields cover the parts the defaults don't produce directly:
+
+- `rowClass` — the full container class string, so a neighbour-dependent
+  modifier (`continuous-day`) can be precomputed.
+- `timeRange` — a time-only string ("14:00 bis 16:00 Uhr"), since the
+  built-in `dates` field always includes the date.
+- `locationBlock` — the wrapped `<b>Ort:</b> <a href="…">address</a>`
+  fragment, bound through `data-html`. The library's "one binding rule
+  per node" forbids putting both `href` and a text label on the same
+  `<a>`, and pre-composing the HTML is the cleanest way around it.
+
+Because `continuous-day` depends on the *previous* event, the work
+happens in a single pre-pass before `renderItems` (the per-event
+`transformEvent` hook can't see neighbours):
+
+```js
+import { GCal } from '@copperdesign/gcal';
+
+const timeFmt = new Intl.DateTimeFormat('de-DE', {
+  hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Europe/Berlin',
+});
+
+function preprocess(items) {
+  const dayKey = (e) => (e.start.dateTime ?? e.start.date).slice(0, 10);
+  return items.map((e, i, arr) => {
+    const sameAsPrev = i > 0 && dayKey(arr[i - 1]) === dayKey(e);
+    const rowClass   = sameAsPrev ? 'gcal-row gcal-continuous-day' : 'gcal-row';
+    const startTime  = e.start.dateTime ? timeFmt.format(new Date(e.start.dateTime)) : '';
+    const endTime    = e.end.dateTime   ? timeFmt.format(new Date(e.end.dateTime))   : '';
+    const timeRange  = startTime && endTime ? `${startTime} bis ${endTime} Uhr` : '';
+    const locationBlock = e.location
+      ? `<b>Ort:</b> <a href="https://maps.google.com/maps?q=${encodeURIComponent(e.location)}" target="_blank">${e.location}</a>`
+      : '';
+    return { ...e, rowClass, timeRange, locationBlock };
+  });
+}
+
+const cal = new GCal({
+  target: '#events',
+  template: '#gcal-row',
+  calendarId: '…', apiKey: '…',
+  locale: 'de-DE', timeZone: 'Europe/Berlin',
+});
+
+// Drive the pipeline yourself when you need pre-render context:
+const items = await fetchEvents({ calendarId: '…', apiKey: '…' });
+cal.renderItems(preprocess(items));
+```
+
+The matching template — structurally identical to the jQuery-era markup
+this layout grew out of:
+
+```html
+<template id="gcal-row">
+  <div data-slot="rowClass" data-attr="class">
+    <div class="gcal-cal">
+      <div class="gcal-day">
+        <div class="gcal-dm" data-slot="startMonth"></div>
+        <div class="gcal-dd" data-slot="startDay"></div>
+        <div class="gcal-dy" data-slot="startYear"></div>
+      </div>
+    </div>
+    <div class="gcal-info">
+      <div class="gcal-time" data-slot="timeRange" data-remove-empty></div>
+      <h3 class="gcal-title" data-slot="summary"></h3>
+      <div class="gcal-description" data-slot="description" data-html data-remove-empty></div>
+      <div class="gcal-location" data-slot="locationBlock" data-html data-remove-empty></div>
+    </div>
+  </div>
+</template>
+```
+
+CSS hides the date pill on continuation rows and tightens the divider:
+
+```css
+.gcal-continuous-day              { border-top: none; }
+.gcal-continuous-day .gcal-day    { display: none; }
+.gcal-continuous-day .gcal-info   { border-top: 1px solid var(--gcal-border); }
+```
+
+Events whose `location` field is empty drop the whole `gcal-location`
+block (via `data-remove-empty`), so authors can inline an "Ort:" line
+in the description for venues the calendar entry doesn't geocode.
 
 ## Browser support
 
