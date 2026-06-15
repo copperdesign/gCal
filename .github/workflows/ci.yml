@@ -45,6 +45,34 @@ jobs:
             node --check "$f"
           done
 
+      - name: banner versions match package.json
+        run: |
+          # The /*! …vX.Y.Z … */ header on line 1 of each src file is
+          # the license notice that survives minification. Easy to
+          # forget to bump alongside package.json — check every src/*.js
+          # against package.json.version so the drift fails the build.
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const pkg = require('./package.json').version;
+            const files = fs.readdirSync('src').filter(f => f.endsWith('.js')).map(f => path.join('src', f));
+            let bad = false;
+            for (const file of files) {
+              const first = fs.readFileSync(file, 'utf8').split('\n', 1)[0];
+              const m = first.match(/^\/\*!\s*gCal\s+—\s+v(\d+\.\d+\.\d+)/);
+              if (!m) {
+                console.error(file + ': banner not found or malformed (expected /*! gCal — vX.Y.Z …)');
+                bad = true;
+                continue;
+              }
+              if (m[1] !== pkg) {
+                console.error(file + ': banner (' + m[1] + ') does not match package.json (' + pkg + ')');
+                bad = true;
+              }
+            }
+            if (bad) process.exit(1);
+          "
+
       - name: package.json is valid JSON
         run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"
 
