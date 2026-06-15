@@ -13,7 +13,7 @@ Successor to a pair of older scripts (a 2018 jQuery plugin and a later vanilla r
 There is no test runner, no bundler, no `npm test`. Everything ships as source.
 
 - **Smoke tests**: open `test/index.html` directly in a browser. Inline checks run on load; all rows must be green. Covers `buildEventsUrl`, `formatEventDates` (all-day, timed same-day, multi-day), the template renderer, and `GCal.renderItems`. No network calls — `GCal.renderItems` is exercised offline so it doesn't need a real calendar.
-- **Demo**: open `demo/index.html` in a browser, paste a real Calendar ID + API key, opt in. This is the only path that hits the live Google API.
+- **Demo**: open `demo/index.html` in a browser, paste a real Calendar ID + API key, opt in. This is the only path that hits the live Google API. The demo imports from unpkg (`@copperdesign/gcal` + `@copperdesign/easy-cookie-consent`), not `../src/`, so it mirrors what a real user ships — local edits to `src/` won't show here until they're published. Use `test/index.html` to validate local changes.
 - **Adding tests**: extend `test/index.html` with another numbered block using the existing `check(label, condition, detail)` helper. Keep the offline-by-default property — only `demo/` should hit the network.
 
 ## Architecture
