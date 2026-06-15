@@ -211,6 +211,44 @@ Tunable via CSS custom properties:
 }
 ```
 
+## Drop-in (Weebly, no build step)
+
+Weebly has no `npm install` — load gCal from a CDN and paste the whole snippet into a single **Embed Code** element on the page where the calendar should appear:
+
+```html
+<link rel="stylesheet" href="https://unpkg.com/@copperdesign/gcal/dist/gcal.css">
+
+<div id="events"></div>
+
+<template id="gcal-row">
+  <article class="gcal-event">
+    <header data-slot="dates"></header>
+    <h3 data-slot="summary"></h3>
+    <p data-slot="description" data-html></p>
+    <a data-slot="mapLink" data-attr="href" hidden>Karte</a>
+  </article>
+</template>
+
+<script type="module">
+  import { GCal } from 'https://unpkg.com/@copperdesign/gcal';
+
+  new GCal({
+    target:     '#events',
+    template:   '#gcal-row',
+    calendarId: 'YOUR_CALENDAR_ID@group.calendar.google.com',
+    apiKey:     'YOUR_API_KEY',
+    locale:     'de-DE',
+    timeZone:   'Europe/Berlin',
+  }).mount();
+</script>
+```
+
+For a sitewide stylesheet, move the `<link>` into **Settings → SEO → Header Code** so every page gets it without re-pasting.
+
+**Security:** the API key is visible in page source — that's by design (it's a public-calendar key), but restrict it in the Google Cloud Console under *APIs & Services → Credentials → HTTP referrers* to your Weebly domain(s) so it can't be reused elsewhere.
+
+If you need consent gating before the fetch (DSGVO), see [Consent flow](#consent-flow) above and pass a `consent` object alongside the other options.
+
 ## Imperative API
 
 ```js
