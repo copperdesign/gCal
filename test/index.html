@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>gCal — smoke test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 50rem; margin: 2rem auto; padding: 0 1rem; }
+    .pass { color: #0a7d32; }
+    .fail { color: #b00020; font-weight: bold; }
+    pre   { background: #f5f5f5; padding: 0.5rem; overflow: auto; font-size: 0.85rem; }
+    h2    { margin-top: 2rem; }
+  </style>
+</head>
+<body>
+  <h1>gCal smoke test</h1>
+  <p>Open in a browser. All checks should be green.</p>
+
+  <ol id="results"></ol>
+
+  <h2>Render fixture</h2>
+  <div id="events"></div>
+
+  <template id="gcal-row">
+    <article>
+      <header data-slot="dates"></header>
+      <h3 data-slot="summary"></h3>
+      <p data-slot="description" data-html data-remove-empty></p>
+      <a data-slot="mapLink" data-attr="href" target="_blank" hidden>Map</a>
+    </article>
+  </template>
+
+  <script type="module">
+    import { GCal, formatEventDates } from '../src/index.js';
+    import { buildEventsUrl }         from '../src/fetch.js';
+    import { resolveTemplate, renderTemplate } from '../src/template.js';
+
+    const out = document.getElementById('results');
+    function check(label, condition, detail = '') {
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="${condition ? 'pass' : 'fail'}">${condition ? 'PASS' : 'FAIL'}</span> — ${label}`;
+      if (detail) li.innerHTML += ` <pre>${detail}</pre>`;
+      out.appendChild(li);
+      return condition;
+    }
+
+    // 1. URL builder
+    const url = buildEventsUrl({ calendarId: 'abc@group.calendar.google.com', apiKey: 'AIza-test' });
+    check('buildEventsUrl encodes calendar ID', url.includes('abc%40group.calendar.google.com'), url);
+    check('buildEventsUrl includes key',        url.includes('key=AIza-test'));
+    check('buildEventsUrl defaults singleEvents=true', url.includes('singleEvents=true'));
+
+    // 2. formatEventDates — all-day, single day
+    {
+      const d = formatEventDates(
+        { start: { date: '2026-06-15' }, end: { date: '2026-06-16' } },
+        { locale: 'de-DE', timeZone: 'Europe/Berlin' }
+      );
+      check('all-day single day formats as "15. Juni 2026"', d.dates === '15. Juni 2026', d.dates);
+      check('all-day flag set', d.allDay === true);
+    }
+
+    // 3. formatEventDates — timed, same day, different times
+    {
+      const d = formatEventDates({
+        start: { dateTime: '2026-06-15T14:00:00+02:00' },
+        end:   { dateTime: '2026-06-15T16:00:00+02:00' },
+      }, { locale: 'de-DE', timeZone: 'Europe/Berlin' });
+      check('timed range: "15. Juni 2026 um 14:00 bis 16:00 Uhr"',
+            d.dates === '15. Juni 2026 um 14:00 bis 16:00 Uhr', d.dates);
+      check('sameDay=true', d.sameDay === true);
+      check('sameTime=false', d.sameTime === false);
+    }
+
+    // 4. formatEventDates — multi-day all-day
+    {
+      const d = formatEventDates(
+        { start: { date: '2026-06-15' }, end: { date: '2026-06-18' } },
+        { locale: 'de-DE', timeZone: 'Europe/Berlin' }
+      );
+      // Google's all-day `end.date` is exclusive — the renderer keeps it
+      // faithful (so this reads as "15. Juni bis 18. Juni"); if a consumer
+      // wants inclusive display they can override via transformEvent.
+      check('multi-day all-day: "15. Juni bis 18. Juni 2026"',
+            d.dates === '15. Juni bis 18. Juni 2026', d.dates);
+    }
+
+    // 5. Template renderer
+    {
+      const tpl = resolveTemplate('#gcal-row');
+      const frag = renderTemplate(tpl, {
+        dates: 'Test date',
+        summary: 'Test summary',
+        description: '',                              // should hide
+        mapLink: 'https://example.com',
+      });
+      const article = frag.querySelector('article');
+      check('textContent bound', article.querySelector('[data-slot="summary"]').textContent === 'Test summary');
+      check('empty data-remove-empty node removed',
+            article.querySelector('[data-slot="description"]') === null);
+      check('attr binding set href', article.querySelector('[data-slot="mapLink"]').getAttribute('href') === 'https://example.com');
+      check('attr-bound node shown when populated', article.querySelector('[data-slot="mapLink"]').hidden === false);
+    }
+
+    // 6. GCal.renderItems (offline)
+    {
+      const cal = new GCal({
+        target:   '#events',
+        template: '#gcal-row',
+        calendarId: 'x', apiKey: 'y',  // not used in offline render
+      });
+      cal.renderItems([
+        { summary: 'Sommerfest', description: 'Spiel und Spaß',
+          location: '123 Example Street, 12345 Sample City',
+          start: { date: '2026-07-01' }, end: { date: '2026-07-02' },
+          htmlLink: 'https://calendar.google.com/event?id=abc' },
+        { summary: 'Mitgliederversammlung',
+          start: { dateTime: '2026-09-12T19:00:00+02:00' },
+          end:   { dateTime: '2026-09-12T21:00:00+02:00' } },
+      ]);
+      const count = document.querySelectorAll('#events article').length;
+      check('renderItems produced 2 articles', count === 2, `got ${count}`);
+    }
+
+    // 7. GCal.renderItems with empty + empty template
+    {
+      const empty = document.createElement('template');
+      empty.id = 'gcal-empty';
+      empty.innerHTML = '<p class="empty">Nothing here.</p>';
+      document.body.appendChild(empty);
+      const target = document.createElement('div');
+      document.body.appendChild(target);
+      new GCal({ target, template: '#gcal-row', calendarId:'x', apiKey:'y', emptyTemplate: '#gcal-empty' })
+        .renderItems([]);
+      check('empty template rendered for []', target.querySelector('.empty') !== null);
+      target.remove();
+      empty.remove();
+    }
+  </script>
+</body>
+</html>

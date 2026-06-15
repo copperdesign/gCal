@@ -1,0 +1,112 @@
+/*
+ * @copperdesign/gcal — default styles.
+ *
+ * Ported from the original jquery.gcal.js stylesheet (jq-gcal-* prefix)
+ * and renamed to gcal-* for the data-slot model. Loading this file is
+ * optional — most sites will style their own templates.
+ *
+ * Variables let the host page rebrand without forking the CSS:
+ *
+ *   :root {
+ *     --gcal-accent:    #294983;
+ *     --gcal-accent-bg: #99C1E3;
+ *     --gcal-time:      #F5A623;
+ *   }
+ *
+ * The original calendar-block layout used CSS table cells. Modernized
+ * here to a flex layout — same visual result, no display:table baggage.
+ */
+
+:where(.gcal-event) {
+  --_accent:    var(--gcal-accent,    #294983);
+  --_accent-bg: var(--gcal-accent-bg, #99C1E3);
+  --_time:      var(--gcal-time,      #F5A623);
+  --_border:    var(--gcal-border,    rgba(0, 0, 0, 0.13));
+
+  display: flex;
+  gap: 1.5rem;
+  padding-top: 1.875rem;
+  border-top: 1px solid var(--_border);
+}
+:where(.gcal-event:first-child) {
+  padding-top: 0;
+  border-top: none;
+}
+
+:where(.gcal-event__cal) {
+  flex: 0 0 6.25rem;
+}
+
+:where(.gcal-event__day) {
+  text-align: center;
+  border-radius: 0.5rem;
+  background: var(--_accent);
+  overflow: hidden;
+}
+:where(.gcal-event__month) {
+  font-size: 0.8em;
+  font-weight: lighter;
+  background: var(--_accent-bg);
+  color: #000;
+}
+:where(.gcal-event__date) {
+  font-size: 3em;
+  line-height: 1.5;
+  color: #fff;
+}
+:where(.gcal-event__year) {
+  font-size: 0.8em;
+  color: #fff;
+  margin-top: -1rem;
+  padding-bottom: 0.25em;
+}
+
+:where(.gcal-event__until) {
+  text-align: center;
+  font-weight: lighter;
+  font-size: 0.7em;
+  margin-top: 0.5em;
+}
+
+:where(.gcal-event__info) {
+  flex: 1;
+  padding-top: 1em;
+}
+:where(.gcal-event__time) {
+  font-size: 1.1em;
+  font-weight: bold;
+  color: var(--_time);
+}
+:where(.gcal-event__title) {
+  font-size: 2em;
+  font-weight: lighter;
+  line-height: 1.6;
+  margin: 0;
+}
+:where(.gcal-event__description) {
+  font-size: 1rem;
+  line-height: 1.5;
+  color: #3f3f3f;
+}
+:where(.gcal-event__description p) {
+  padding: 0;
+  margin: 0;
+}
+:where(.gcal-event__description ul,
+       .gcal-event__description ol) {
+  margin-left: 1.25rem;
+}
+:where(.gcal-event__location) {
+  display: block;
+  padding-top: 0.5em;
+}
+:where(.gcal-event__actions) {
+  display: flex;
+  gap: 0.5rem;
+  padding-top: 1em;
+}
+
+:where(.gcal-error) {
+  padding: 1rem;
+  color: #b00020;
+}

@@ -1,0 +1,47 @@
+{
+  "name": "@copperdesign/gcal",
+  "version": "0.1.0",
+  "description": "Render a Google Calendar into HTML you control. Template-driven, locale-aware, consent-friendly.",
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "exports": {
+    ".": {
+      "import": "./src/index.js"
+    },
+    "./dates": "./src/dates.js",
+    "./fetch": "./src/fetch.js",
+    "./template": "./src/template.js",
+    "./consent": "./src/consent.js",
+    "./css": "./dist/gcal.css"
+  },
+  "files": [
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "google-calendar",
+    "gcal",
+    "calendar",
+    "events",
+    "template",
+    "esm",
+    "no-dependencies"
+  ],
+  "author": "Christian Fillies <christian@manolab.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/copperdesign/gCal.git"
+  },
+  "homepage": "https://github.com/copperdesign/gCal#readme",
+  "bugs": {
+    "url": "https://github.com/copperdesign/gCal/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false
+}

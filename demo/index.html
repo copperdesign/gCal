@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>@copperdesign/gcal — Demo</title>
+  <link rel="stylesheet" href="../dist/gcal.css">
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 50rem;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      color: #222;
+    }
+    h1 { font-weight: 200; letter-spacing: -0.02em; }
+    .controls { margin-bottom: 2rem; padding: 1rem; background: #f5f5f5; border-radius: 0.5rem; }
+    .controls label { display: block; margin-bottom: 0.5rem; }
+    .controls input { width: 100%; padding: 0.4rem; font: inherit; }
+    .consent-card { padding: 1rem; border: 1px solid #ccc; border-radius: 0.5rem; }
+    .consent-card button { padding: 0.5rem 1rem; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+  <h1>@copperdesign/gcal</h1>
+  <p>Demo page. Edit the two fields, then opt in to load events.</p>
+
+  <div class="controls">
+    <label>Calendar ID <input id="cfg-cal" placeholder="…@group.calendar.google.com"></label>
+    <label>API Key     <input id="cfg-key" placeholder="AIza…"></label>
+    <button id="reload">Reload</button>
+  </div>
+
+  <div id="events"></div>
+
+  <!-- Event template -->
+  <template id="gcal-row">
+    <article class="gcal-event">
+      <aside class="gcal-event__cal">
+        <div class="gcal-event__day">
+          <div class="gcal-event__month" data-slot="startMonth"></div>
+          <div class="gcal-event__date"  data-slot="startDay"></div>
+          <div class="gcal-event__year"  data-slot="startYear"></div>
+        </div>
+      </aside>
+      <div class="gcal-event__info">
+        <div class="gcal-event__time" data-slot="dates"></div>
+        <h3 class="gcal-event__title" data-slot="summary"></h3>
+        <div class="gcal-event__description" data-slot="description" data-html data-remove-empty></div>
+        <div class="gcal-event__location" data-slot="location" data-remove-empty></div>
+        <div class="gcal-event__actions">
+          <a data-slot="mapLink"  data-attr="href" target="_blank" hidden>Karte</a>
+          <a data-slot="htmlLink" data-attr="href" target="_blank" hidden>Details</a>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <!-- State templates -->
+  <template id="gcal-cta">
+    <div class="consent-card">
+      <p>Beim Laden des Kalenders werden Daten an Google übertragen.</p>
+      <button data-gcal-optin>Termine laden</button>
+    </div>
+  </template>
+
+  <template id="gcal-empty">
+    <p>Keine aktuellen Termine.</p>
+  </template>
+
+  <template id="gcal-loading">
+    <p aria-busy="true">Termine werden geladen…</p>
+  </template>
+
+  <template id="gcal-error">
+    <p class="gcal-error">Fehler: <span data-slot="message"></span></p>
+  </template>
+
+  <script type="module">
+    import { GCal } from '../src/index.js';
+
+    // Trivial demo consent — localStorage flag, no real cookie banner.
+    const KEY = 'gcal-demo-consent';
+    const consent = {
+      check:   () => localStorage.getItem(KEY) === '1',
+      request: async () => {
+        localStorage.setItem(KEY, '1');
+        document.dispatchEvent(new CustomEvent('consentchange'));
+      },
+      ctaTemplate: '#gcal-cta',
+    };
+
+    let cal;
+    function rebuild() {
+      const calendarId = document.getElementById('cfg-cal').value.trim();
+      const apiKey     = document.getElementById('cfg-key').value.trim();
+      if (!calendarId || !apiKey) {
+        document.getElementById('events').textContent = 'Add a calendar ID and API key above.';
+        return;
+      }
+      if (cal) cal.unmount();
+      cal = new GCal({
+        target:   '#events',
+        template: '#gcal-row',
+        calendarId, apiKey,
+        emptyTemplate:   '#gcal-empty',
+        errorTemplate:   '#gcal-error',
+        loadingTemplate: '#gcal-loading',
+        consent,
+        locale:   'de-DE',
+        timeZone: 'Europe/Berlin',
+      });
+      cal.mount();
+    }
+    document.getElementById('reload').addEventListener('click', rebuild);
+  </script>
+</body>
+</html>
