@@ -43,6 +43,20 @@ That's it. No framework, no virtual DOM, no jQuery. ~7KB unminified.
 </script>
 ```
 
+## Google Cloud setup
+
+Three things have to be in place before the library can fetch anything:
+
+1. **Make the calendar public.** Google Calendar → your calendar's *Settings and sharing* → *Access permissions* → tick **Make available to public**. The **Calendar ID** (`…@group.calendar.google.com`) is further down on the same page under *Integrate calendar*.
+
+2. **Create an API key.** [Google Cloud Console](https://console.cloud.google.com/) → *APIs & Services* → *Library* → enable **Google Calendar API**. Then *Credentials* → *Create credentials → API key*.
+
+3. **Restrict the key.** It ships in your page source — anyone viewing your site can read it. Two restrictions stop it being reused elsewhere:
+   - **Application restrictions → HTTP referrers (websites)** → add every host the embed runs on. Google requires the `*` wildcard form: `https://example.com/*`, `https://www.example.com/*`, plus any staging or preview domain.
+   - **API restrictions → Restrict key** → select **Google Calendar API** only.
+
+Without the restrictions the key still works, but any visitor who copies it can use your project's quota from anywhere.
+
 ## Template binding
 
 The template is plain HTML inside a `<template>` element. Three attributes control rendering:
@@ -245,7 +259,7 @@ Weebly has no `npm install` — load gCal from a CDN and paste the whole snippet
 
 For a sitewide stylesheet, move the `<link>` into **Settings → SEO → Header Code** so every page gets it without re-pasting.
 
-**Security:** the API key is visible in page source — that's by design (it's a public-calendar key), but restrict it in the Google Cloud Console under *APIs & Services → Credentials → HTTP referrers* to your Weebly domain(s) so it can't be reused elsewhere.
+**Before you paste this live:** complete the steps in [Google Cloud setup](#google-cloud-setup) above — in particular, restrict the API key to your Weebly domain(s) under *HTTP referrers*, since the key ships in page source.
 
 If you need consent gating before the fetch (DSGVO), see [Consent flow](#consent-flow) above and pass a `consent` object alongside the other options.
 
