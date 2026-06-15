@@ -49,13 +49,18 @@
     check('buildEventsUrl includes key',        url.includes('key=AIza-test'));
     check('buildEventsUrl defaults singleEvents=true', url.includes('singleEvents=true'));
 
-    // 2. formatEventDates — all-day, single day
+    // 2. formatEventDates — all-day, end.date is exclusive (Google's contract).
+    // A "single day" all-day event on 15 June has end.date = 16 June. The
+    // library renders this faithfully as a range; consumers wanting inclusive
+    // display ("15. Juni 2026") override via transformEvent. See test 4 for
+    // the multi-day case that documents the same convention.
     {
       const d = formatEventDates(
         { start: { date: '2026-06-15' }, end: { date: '2026-06-16' } },
         { locale: 'de-DE', timeZone: 'Europe/Berlin' }
       );
-      check('all-day single day formats as "15. Juni 2026"', d.dates === '15. Juni 2026', d.dates);
+      check('all-day "single day" (exclusive end) renders as "15. Juni bis 16. Juni 2026"',
+            d.dates === '15. Juni bis 16. Juni 2026', d.dates);
       check('all-day flag set', d.allDay === true);
     }
 
