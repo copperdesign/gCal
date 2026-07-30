@@ -152,7 +152,7 @@ new GCal({ /* …, */ consent }).mount();
 ```html
 <template id="gcal-cta">
   <div class="consent-card">
-    <p>Beim Laden des Kalenders werden Daten an Google übertragen.</p>
+    <p>Beim Laden wird eine Verbindung zu Google hergestellt.</p>
     <button data-gcal-optin>Termine laden</button>
   </div>
 </template>
