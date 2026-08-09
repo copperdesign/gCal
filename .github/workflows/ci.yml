@@ -28,6 +28,12 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # Manual re-run. Needed more often than you'd think: GitHub skips push
+  # and pull_request runs when a skip-CI marker appears ANYWHERE in the
+  # commit message, including in prose that merely mentions one. A commit
+  # documenting that behaviour skipped its own CI run, and without this
+  # trigger the only way to verify that tree was to push another commit.
+  workflow_dispatch:
 
 jobs:
   smoke:

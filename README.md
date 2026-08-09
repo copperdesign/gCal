@@ -657,11 +657,23 @@ committing workflow from re-triggering itself forever — but it means
   fire, add a [Deploy Hook](https://developers.cloudflare.com/pages/configuration/deploy-hooks/)
   call as a final step in the sync workflow.
 
-> **Do not put `[skip ci]` in the commit message.** It's a natural
-> instinct for a bot commit, and on Cloudflare Pages it is a trap:
-> `[CI Skip]`, `[Skip CI]` and `[CF-Pages-Skip]` all cause Pages to skip
-> the build entirely, so your calendar would commit and never deploy.
-> The default message (`chore: sync calendar`) is safe; if you override
+> **Keep skip-CI markers out of the commit message.** Suppressing CI on
+> a bot commit is a natural instinct, and here it silently breaks the
+> thing you're building.
+>
+> Both platforms honour them. GitHub Actions skips `push` and
+> `pull_request` runs on `skip ci`, `ci skip`, `no ci`, `skip actions`
+> or `actions skip` (in square brackets); Cloudflare Pages skips a build
+> on `CI Skip`, `Skip CI` or `CF-Pages-Skip`. Either way your calendar
+> commits every night and deploys never — no error, no red run.
+>
+> The nasty part: the match is **anywhere in the message, not just the
+> subject line**. A commit whose body merely *mentions* one of these
+> markers — a changelog entry, a note like this one — skips its own run.
+> That is not hypothetical; the commit adding this paragraph did exactly
+> that.
+>
+> The default message (`chore: sync calendar`) is safe. If you override
 > `commit-message`, keep it clear of those markers.
 
 ### Host notes
