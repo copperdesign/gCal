@@ -341,6 +341,76 @@ test('formatEventDates keeps timed events off the inclusive shift', () => {
   assert.ok(d.dates.includes('16. Juni'), d.dates);
 });
 
+/* ── time zone independence (#9) ─────────────────────────────────────── */
+
+// `2026-06-15` names a calendar day, not an instant, so it has to render as
+// the 15th everywhere. It parses as UTC midnight, and formatting that in a
+// zone behind Greenwich used to yield the 14th — on the browser path, where
+// `timeZone` is optional and Intl falls back to the VISITOR's zone, that
+// meant one page showing one event on two different dates.
+const ZONES = ['UTC', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles', 'Pacific/Honolulu', 'Pacific/Kiritimati'];
+
+function inZone(tz, fn) {
+  const original = process.env.TZ;
+  try {
+    process.env.TZ = tz;
+    return fn();
+  } finally {
+    process.env.TZ = original;
+  }
+}
+
+test('an all-day event renders the same date in every host zone', () => {
+  const event = { start: { date: '2026-06-15' }, end: { date: '2026-06-16' } };
+  for (const tz of ZONES) {
+    // No `timeZone` option on purpose — the browser default.
+    const d = inZone(tz, () => formatEventDates(event, { locale: 'en-GB' }));
+    assert.equal(d.dates, '15 June 2026', `TZ=${tz}`);
+    assert.equal(d.startDay, '15', `TZ=${tz}`);
+    assert.equal(d.sameDay, true, `TZ=${tz}`);
+  }
+});
+
+test('a multi-day all-day event renders the same range in every host zone', () => {
+  const event = { start: { date: '2026-06-15' }, end: { date: '2026-06-18' } };
+  for (const tz of ZONES) {
+    const d = inZone(tz, () => formatEventDates(event, { locale: 'en-GB' }));
+    // Connectors default to German ("bis") regardless of the locale.
+    assert.equal(d.dates, '15 June bis 17 June 2026', `TZ=${tz}`);
+    assert.equal(d.startDay, '15', `TZ=${tz}`);
+    assert.equal(d.endDay, '17', `TZ=${tz}`);
+  }
+});
+
+test('startDay follows the configured timeZone, not the host zone', () => {
+  // The second half of #9: startDay came from Date.getDate(), which answers
+  // in the host's zone. A UTC runner rendering a Berlin site reported "14"
+  // for a 00:30 Berlin event while the sentence beside it said the 15th.
+  const event = {
+    start: { dateTime: '2026-06-15T00:30:00+02:00' },
+    end:   { dateTime: '2026-06-15T02:00:00+02:00' },
+  };
+  for (const tz of ZONES) {
+    const d = inZone(tz, () => formatEventDates(event, { locale: 'en-GB', timeZone: 'Europe/Berlin' }));
+    assert.equal(d.startDay, '15', `TZ=${tz}`);
+    assert.ok(d.dates.startsWith('15 June 2026'), `TZ=${tz}: ${d.dates}`);
+  }
+});
+
+test('a timed event still honours the configured zone over UTC', () => {
+  // The all-day fix must not leak into timed events: dateTime carries a real
+  // offset, so the configured zone is exactly the right lens for it.
+  const event = {
+    start: { dateTime: '2026-06-15T23:30:00+02:00' },  // 21:30 UTC
+    end:   { dateTime: '2026-06-16T00:30:00+02:00' },
+  };
+  const berlin = formatEventDates(event, { locale: 'en-GB', timeZone: 'Europe/Berlin' });
+  const utc    = formatEventDates(event, { locale: 'en-GB', timeZone: 'UTC' });
+  assert.equal(berlin.startDay, '15');
+  assert.equal(berlin.startTime, '23:30');
+  assert.equal(utc.startTime, '21:30', 'UTC view must differ — this is not an all-day date');
+});
+
 /* ── plain text ──────────────────────────────────────────────────────── */
 
 test('plainText strips tags and collapses whitespace', () => {

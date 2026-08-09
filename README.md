@@ -134,6 +134,14 @@ const data = {
 > `transformEvent`. **If you wrote such a correction, remove it** — it will
 > now shift the date a second day. Timed events are unaffected: only
 > `date` is exclusive, `dateTime` is not.
+>
+> **Also fixed in 0.3.0:** an all-day date names a calendar day, so it now
+> renders as that day regardless of `timeZone` or where the page is read.
+> Previously it was treated as an instant and came out one day early for
+> anyone west of Greenwich — including visitors, since `timeZone` is
+> optional and falls back to the runtime's zone. `startDay` / `endDay`
+> likewise follow the configured `timeZone` now rather than the host's
+> ([#9](https://github.com/copperdesign/gCal/issues/9)).
 
 ## Configuration
 

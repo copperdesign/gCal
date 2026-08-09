@@ -55,6 +55,12 @@ function getFormatters(locale, timeZone) {
   const opts = timeZone ? { timeZone } : {};
   cached = {
     dayMonth: new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'long', ...opts }),
+    // Read alongside `dayMonth` rather than via Date.prototype.getDate(),
+    // which answers in the HOST's zone and ignores `timeZone` entirely. A
+    // UTC build machine rendering a Berlin site turned
+    // 2026-06-15T00:30:00+02:00 into day "14" while the sentence beside it
+    // said the 15th — visible as a date pill disagreeing with its own row.
+    day:      new Intl.DateTimeFormat(locale, { day: 'numeric', ...opts }),
     year:     new Intl.DateTimeFormat(locale, { year: 'numeric', ...opts }),
     time:     new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', hour12: false, ...opts }),
     iso:      new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', ...opts }),
@@ -106,7 +112,16 @@ export function formatEventDates(event, options = {}) {
   // exclusive, `dateTime` is not.
   const end = new Date(allDay ? Date.parse(endSrc) - DAY_MS : endSrc);
 
-  const fmt = getFormatters(locale, timeZone);
+  // An all-day `date` names a CALENDAR DAY, not an instant — "2026-06-15"
+  // is the 15th everywhere, not a moment that lands on different dates
+  // depending on where you read it. It parses as UTC midnight, so it has
+  // to be read back in UTC: formatting it in the viewer's zone renders the
+  // previous day for anyone west of Greenwich, and since `timeZone` is
+  // optional (Intl then falls back to the RUNTIME's zone) that meant the
+  // same page showing the same event on different dates to a visitor in
+  // Berlin and one in New York. Timed events keep the configured zone,
+  // which is exactly right for them: `dateTime` carries a real offset.
+  const fmt = getFormatters(locale, allDay ? 'UTC' : timeZone);
 
   // Same-day / same-time comparison uses ISO output (locale-independent)
   // so reordering month/day in other locales doesn't confuse the check.
@@ -135,11 +150,11 @@ export function formatEventDates(event, options = {}) {
     allDay,
     sameDay,
     sameTime,
-    startDay:   String(start.getDate()),
+    startDay:   fmt.day.format(start),
     startMonth: startDayMonth.replace(/^\d+\.?\s*/, ''),  // "Juni" from "5. Juni"
     startYear,
     startTime,
-    endDay:     sameDay ? '' : String(end.getDate()),
+    endDay:     sameDay ? '' : fmt.day.format(end),
     endMonth:   sameDay ? '' : endDayMonth.replace(/^\d+\.?\s*/, ''),
     endYear:    sameDay ? '' : fmt.year.format(end),
     endTime:    sameTime ? '' : endTime,
