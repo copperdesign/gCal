@@ -1,0 +1,130 @@
+# Reusable calendar sync — called from a consuming site's own workflow.
+#
+#   jobs:
+#     sync:
+#       uses: copperdesign/gCal/.github/workflows/sync.yml@v0.2.0
+#       with:
+#         config: gcal.config.json
+#       secrets:
+#         api-key: ${{ secrets.GCAL_API_KEY }}
+#
+# Pin to a TAG, not to @master: this file changes with the CLI it runs.
+#
+# Requires, in the calling repo: @copperdesign/gcal as a dependency, a
+# package-lock.json (both `npm ci` and setup-node's cache need one), and
+# the config file named by `config`.
+#
+# WHAT THIS DOES, AND WHAT IT POINTEDLY DOES NOT
+# It fetches the calendar, writes one deterministic JSON file, and
+# commits it when it changed. It does not build and it does not deploy.
+# Coupling a deploy in here would tie the workflow to one host and make
+# it useless to everyone else — the consumer's existing pipeline picks
+# the committed file up on its own terms.
+#
+# THE ONE NON-OBVIOUS THING (read this before scheduling it)
+# A push made with GITHUB_TOKEN does NOT trigger other GitHub Actions
+# workflows. That is deliberate on GitHub's part — it is what stops a
+# workflow that commits from re-triggering itself forever — but it means
+# the commit this job makes will NOT start your deploy workflow.
+#
+#   · Deploying from GitHub Actions (Firebase, rsync, most setups):
+#     schedule this job AHEAD of your deploy job's own cron and let the
+#     deploy pick the committed file up. A ~15 minute gap is plenty.
+#     Expecting the commit to chain will leave the calendar never
+#     deploying, silently.
+#
+#   · Deploying from a host that watches the repo (Cloudflare Pages,
+#     Netlify, Vercel): those build from a webhook rather than from an
+#     Actions workflow, so this restriction does not apply to them and
+#     the commit should trigger a build directly. Verify it does on your
+#     setup; if it doesn't, add a deploy-hook call as a final step.
+#
+# CONCURRENCY
+# Two runs racing (a manual dispatch during the cron, say) would both
+# checkout, both commit, and one would lose its push. The concurrency
+# group serialises them instead. If a push still fails because something
+# else landed on the branch mid-run, this fails loudly on purpose — a
+# silently lost update is the worse outcome.
+
+name: Sync calendar
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: 'Path to the gcal-sync config file'
+        type: string
+        default: 'gcal.config.json'
+      node-version:
+        description: 'Node version to run the sync on'
+        type: string
+        default: '20'
+      commit-message:
+        description: 'Commit message used when the calendar changed'
+        type: string
+        default: 'chore: sync calendar'
+      strict:
+        description: 'Fail the job when the fetch fails, instead of keeping the existing artifact'
+        type: boolean
+        default: false
+    secrets:
+      api-key:
+        description: 'Server-side Google API key, restricted to the Calendar API'
+        required: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    # Needed to push the commit. The repo default token is read-only.
+    permissions:
+      contents: write
+    concurrency:
+      group: gcal-sync-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      # --ignore-scripts: this job only needs the CLI, and a consumer's
+      # postinstall is usually build tooling (image encoders, fetchers)
+      # that has no business running in a data-sync job.
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      - name: Sync
+        env:
+          GCAL_API_KEY: ${{ secrets.api-key }}
+        run: npx gcal-sync --config "${{ inputs.config }}" ${{ inputs.strict && '--strict' || '' }}
+
+      # Read the output path from the config rather than adding
+      # everything: `git add -A` in a job with write permission would
+      # happily sweep up anything else the runner touched.
+      - name: Commit if the calendar changed
+        env:
+          COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        run: |
+          set -euo pipefail
+          out=$(node -p "JSON.parse(require('fs').readFileSync('${{ inputs.config }}','utf8')).out")
+
+          if [ ! -f "$out" ]; then
+            # The sync exited 0 without writing — a failed fetch with no
+            # artifact to fall back on. It already said so on stderr.
+            echo "No artifact at $out — nothing to commit."
+            exit 0
+          fi
+
+          if git diff --quiet -- "$out"; then
+            echo "Calendar unchanged — nothing to commit, no build triggered."
+            exit 0
+          fi
+
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "$out"
+          git commit -m "$COMMIT_MESSAGE"
+          git push
+          echo "Committed $out."

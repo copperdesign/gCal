@@ -9,6 +9,9 @@
   },
   "main": "./src/index.js",
   "module": "./src/index.js",
+  "bin": {
+    "gcal-sync": "./bin/gcal-sync.mjs"
+  },
   "exports": {
     ".": {
       "import": "./src/index.js"
@@ -22,6 +25,7 @@
   },
   "files": [
     "src",
+    "bin",
     "dist",
     "README.md",
     "LICENSE"
