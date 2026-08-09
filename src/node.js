@@ -1,0 +1,281 @@
+/*! gCal — v0.2.0 - 2026-08-09
+ * https://copperdesign.github.io/
+ *
+ * Copyright (c) 2026 Christian Fillies;
+ * Licensed under the MIT license */
+
+/**
+ * @docs ../README.md#server-side-rendering-ssg
+ *
+ * @copperdesign/gcal/node — the build-time half of the library.
+ *
+ *   import { fetchAllEvents, normalizeEvents, serializeArtifact }
+ *     from '@copperdesign/gcal/node';
+ *
+ * Why this exists: in the browser path the VISITOR's browser calls the
+ * Calendar API, which transfers their IP to Google and therefore needs
+ * informed consent. It also means the events aren't in the shipped HTML
+ * at all — invisible to crawlers, to LLMs, and to a screen reader
+ * before opt-in.
+ *
+ * Fetching at build time inverts both: the events become static markup,
+ * no visitor ever contacts Google, no API key ships in page source, and
+ * Google sees one request per build instead of one per visitor.
+ *
+ * DETERMINISM IS THE CONTRACT (see `normalizeEvents`)
+ * Consumers commit the artifact and gate their deploy on whether it
+ * changed. If the output wobbles between runs the gate fires every
+ * night and the whole thing is worse than useless — so everything in
+ * here is ordered, allow-listed, and free of timestamps by
+ * construction, not by convention.
+ *
+ * This module deliberately imports NOTHING DOM-bound — not `index.js`,
+ * not `template.js`. It must stay importable in plain Node with no
+ * shim; `test/node.test.mjs` asserts that.
+ */
+
+import { fetchEvents, fetchEventsPage } from './fetch.js';
+
+export { fetchEvents };
+export { formatEventDates } from './dates.js';
+
+/**
+ * Artifact format version. A CONSTANT — never a timestamp, never a
+ * hash — so it can live in the output without breaking byte-stability.
+ * Bump it when the shape of a normalized event changes, so a consumer
+ * can tell "this file is older than my renderer" from "the calendar is
+ * empty".
+ */
+export const SCHEMA_VERSION = 1;
+
+/* Fields we keep, in the order we emit them.
+   ---------------------------------------------------------------------------
+   Everything NOT on this list is dropped, and the omissions are the point:
+   `etag`, `updated`, `sequence` and friends change without the event
+   changing, so carrying them would produce a fresh diff most nights and
+   defeat the deploy gate. Add a field here only after checking it's stable. */
+const EVENT_FIELDS = ['id', 'start', 'end', 'allDay', 'summary', 'description', 'location', 'htmlLink'];
+
+// Google emits at most these three on either side of an event, and all
+// three are stable. Fixed order so the serialized shape can't drift.
+const DATE_FIELDS = ['date', 'dateTime', 'timeZone'];
+
+/**
+ * Fetch every page of a calendar's events.
+ *
+ * `fetchEvents` stops at `maxResults` (default 100) and silently drops
+ * the rest — survivable in a browser widget showing "the next few
+ * events", but wrong for a build that's supposed to render the whole
+ * calendar. A busy calendar would just quietly lose its tail.
+ *
+ * Same config as `fetchEvents`; `maxResults` becomes the PAGE size
+ * rather than a cap.
+ */
+export async function fetchAllEvents(config, { signal } = {}) {
+  const items = [];
+  let pageToken;
+  // Google always returns a token when more pages exist, and omits it on
+  // the last page. The seen-set is a cheap guard against a malformed
+  // response pointing at itself — an infinite loop in a nightly job is a
+  // uniquely annoying thing to debug.
+  const seen = new Set();
+  do {
+    const page = await fetchEventsPage({ ...config, pageToken }, { signal });
+    items.push(...page.items);
+    pageToken = page.nextPageToken;
+    if (pageToken && seen.has(pageToken)) break;
+    if (pageToken) seen.add(pageToken);
+  } while (pageToken);
+  return items;
+}
+
+/**
+ * Google Calendar events → a stable, minimal array.
+ *
+ * The one hard requirement: given the same calendar contents, this
+ * returns the same thing every time — same fields, same key order, same
+ * element order — regardless of what order the API happened to return
+ * and regardless of when it was called.
+ *
+ * Returns a plain array so callers can filter/map it directly. The
+ * `schemaVersion` wrapper lives in `serializeArtifact`, because it
+ * describes the FILE, not the events.
+ */
+export function normalizeEvents(items = []) {
+  return items
+    .map(normalizeEvent)
+    .sort(byStartThenId);
+}
+
+function normalizeEvent(event) {
+  // Built key-by-key in EVENT_FIELDS order — never by spreading the API
+  // object, which would carry both unknown fields and the API's key
+  // order into the output.
+  const out = {};
+  for (const field of EVENT_FIELDS) {
+    switch (field) {
+      case 'allDay':
+        // The authoritative signal: timed events carry `dateTime`,
+        // all-day events only `date`. Derived once here so downstream
+        // renderers don't each re-derive it (and get it subtly wrong).
+        out.allDay = !event.start?.dateTime;
+        break;
+      case 'start':
+      case 'end':
+        out[field] = normalizeDateSide(event[field]);
+        break;
+      default:
+        // Absent and empty collapse to '' so a field appearing/disappearing
+        // upstream doesn't change the key SET, only a value. Same keys every
+        // time is what makes two artifacts comparable at all.
+        out[field] = event[field] ?? '';
+    }
+  }
+  return out;
+}
+
+function normalizeDateSide(side = {}) {
+  const out = {};
+  for (const field of DATE_FIELDS) {
+    if (side[field] != null) out[field] = side[field];
+  }
+  return out;
+}
+
+/**
+ * Total order: instant, then the raw start string, then id.
+ *
+ * Instant alone isn't enough — two events can start at the same moment,
+ * and then the sort would fall back to the input order, which is exactly
+ * the non-determinism we're trying to eliminate. The raw string breaks
+ * ties between equal instants written differently (an all-day `date` and
+ * a midnight `dateTime`), and `id` breaks everything else.
+ *
+ * `id` alone would ALSO be wrong as the primary key: an expanded
+ * recurring series shares one base id with an instance-start suffix, so
+ * id order and chronological order disagree.
+ */
+function byStartThenId(a, b) {
+  const av = startValue(a);
+  const bv = startValue(b);
+  if (av !== bv) return av - bv;
+  const as = rawStart(a);
+  const bs = rawStart(b);
+  if (as !== bs) return as < bs ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+const rawStart = (e) => e.start.dateTime ?? e.start.date ?? '';
+
+function startValue(e) {
+  const t = Date.parse(rawStart(e));
+  // An unparseable date sorts last rather than throwing — a single
+  // malformed event shouldn't take down a nightly build. NaN would make
+  // every comparison false and silently corrupt the whole order.
+  return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t;
+}
+
+/**
+ * Normalized events → the exact JSON text to write to disk.
+ *
+ * Canonical on purpose. Three consuming sites serializing "the same"
+ * object three slightly different ways (indentation, trailing newline,
+ * key order) would each get their own spurious nightly diff, so the
+ * byte-for-byte decision is made once, here.
+ *
+ * Two-space indent and a trailing newline because the file is committed
+ * and read in PR diffs by humans.
+ */
+export function serializeArtifact(events) {
+  return `${JSON.stringify({ schemaVersion: SCHEMA_VERSION, events }, null, 2)}\n`;
+}
+
+/**
+ * The instant at which `now`'s day starts in `timeZone`, as an ISO
+ * string — i.e. what to pass as `timeMin`.
+ *
+ * THIS IS NOT A CONVENIENCE. Passing `new Date().toISOString()` as
+ * `timeMin` (which the browser path does, correctly, for its purposes)
+ * puts a fresh timestamp into the request every run. Any event boundary
+ * near "now" then flickers in and out of the result set, the artifact
+ * changes for no reason, and the deploy gate fires nightly.
+ *
+ * The time zone is a required argument rather than defaulting to UTC
+ * because a job at 01:00 UTC is already 02:00 or 03:00 in Berlin — a
+ * UTC-floored `timeMin` would drop an event that's still happening
+ * today locally.
+ */
+export function startOfDay(timeZone, now = new Date()) {
+  const { year, month, day } = zonedParts(timeZone, now);
+  const wallClock = Date.UTC(year, month - 1, day);
+  // Convert wall-clock-midnight to a real instant by subtracting the
+  // zone's offset. Applied twice because the offset is itself a function
+  // of the instant: on a DST boundary the first guess can land on the
+  // wrong side of the transition, and the second pass corrects it.
+  let instant = wallClock - offsetAt(timeZone, new Date(wallClock));
+  instant = wallClock - offsetAt(timeZone, new Date(instant));
+  return new Date(instant).toISOString();
+}
+
+function zonedParts(timeZone, date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(date);
+  const out = {};
+  for (const { type, value } of parts) {
+    if (type !== 'literal') out[type] = Number(value);
+  }
+  // en-US with hour12:false renders midnight as hour 24 in some ICU
+  // versions. Fold it back so arithmetic on the value can't jump a day.
+  out.hour %= 24;
+  return out;
+}
+
+// How far the zone is ahead of UTC at `date`, in ms. Derived by reading
+// the wall clock in that zone and diffing it against the real instant —
+// no offset table, no DST rules of our own.
+function offsetAt(timeZone, date) {
+  const p = zonedParts(timeZone, date);
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - date.getTime();
+}
+
+/**
+ * Events → an HTML string.
+ *
+ * No default markup, matching the browser renderer's position: the
+ * library doesn't ship an opinion on markup. `row` gets
+ * `(event, index, all)` — the index and the full array are part of the
+ * contract, because neighbour-aware rendering (collapsing a repeated
+ * date pill, grouping by month) is common and otherwise forces every
+ * consumer to re-implement the loop just to see its neighbours.
+ *
+ * `empty` is returned verbatim for an empty list, so the caller decides
+ * whether that's a message, a hidden element, or nothing at all.
+ */
+export function renderEventsToString(items = [], { row, empty = '', wrap } = {}) {
+  if (typeof row !== 'function') throw new TypeError('gCal: row must be a function');
+  if (items.length === 0) return empty;
+  const html = items.map((event, i, all) => row(event, i, all)).join('');
+  return wrap ? wrap(html) : html;
+}
+
+/**
+ * Text-node escaping. Exists so three consuming sites don't each write
+ * their own subtly different version.
+ *
+ * NOT applied automatically: Google returns real HTML in `description`,
+ * and escaping it would visibly break every event that uses formatting.
+ * Escape `summary` and `location`; leave `description` alone. The
+ * asymmetry is deliberate and documented in the README.
+ */
+export function escapeHtml(value = '') {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Attribute values additionally need the quote character.
+export function escapeAttr(value = '') {
+  return escapeHtml(value).replace(/"/g, '&quot;');
+}

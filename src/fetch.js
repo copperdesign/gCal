@@ -1,4 +1,4 @@
-/*! gCal — v0.1.2 - 2026-06-15
+/*! gCal — v0.2.0 - 2026-08-09
  * https://copperdesign.github.io/
  *
  * Copyright (c) 2026 Christian Fillies;
@@ -30,6 +30,7 @@ export function buildEventsUrl({
   timeMin    = new Date().toISOString(),
   timeMax,
   q,
+  pageToken,
 }) {
   if (!calendarId) throw new Error('gCal: calendarId is required');
   if (!apiKey)     throw new Error('gCal: apiKey is required');
@@ -48,18 +49,24 @@ export function buildEventsUrl({
     singleEvents: String(singleEvents),
     timeMin,
   });
-  if (timeMax) params.set('timeMax', timeMax);
-  if (q)       params.set('q', q);
+  if (timeMax)   params.set('timeMax', timeMax);
+  if (q)         params.set('q', q);
+  // Only meaningful to a caller walking pages (see `fetchEventsPage`);
+  // the browser path never sets it.
+  if (pageToken) params.set('pageToken', pageToken);
 
   return `${ENDPOINT}/${encodeURIComponent(calendarId)}/events?${params}`;
 }
 
 /**
- * Fetch events, returning the items array (possibly empty).
- * Throws on network failure or non-2xx response — callers decide
- * whether to surface the error to the user.
+ * Fetch ONE page, returning `{ items, nextPageToken }`.
+ *
+ * Split out from `fetchEvents` for callers that need to walk the whole
+ * calendar rather than just its first page — see `fetchAllEvents` in
+ * `node.js`. The browser path has no use for it: a widget showing the
+ * next few events is done after one page.
  */
-export async function fetchEvents(config, { signal } = {}) {
+export async function fetchEventsPage(config, { signal } = {}) {
   const url = buildEventsUrl(config);
   const res = await fetch(url, { signal });
   if (!res.ok) {
@@ -74,5 +81,19 @@ export async function fetchEvents(config, { signal } = {}) {
     throw new Error(`gCal: ${detail}`);
   }
   const data = await res.json();
-  return data.items ?? [];
+  return { items: data.items ?? [], nextPageToken: data.nextPageToken };
+}
+
+/**
+ * Fetch events, returning the items array (possibly empty).
+ * Throws on network failure or non-2xx response — callers decide
+ * whether to surface the error to the user.
+ *
+ * First page only, capped at `maxResults`. That's the right shape for
+ * the browser widget; a build rendering the COMPLETE calendar wants
+ * `fetchAllEvents` from the `/node` entry point instead.
+ */
+export async function fetchEvents(config, { signal } = {}) {
+  const { items } = await fetchEventsPage(config, { signal });
+  return items;
 }

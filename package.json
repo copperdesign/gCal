@@ -1,9 +1,10 @@
 {
   "name": "@copperdesign/gcal",
-  "version": "0.1.2",
-  "description": "Render a Google Calendar into HTML you control. Template-driven, locale-aware, consent-friendly.",
+  "version": "0.2.0",
+  "description": "Render a Google Calendar into HTML you control — in the browser or at build time. Template-driven, locale-aware, consent-friendly.",
   "type": "module",
   "scripts": {
+    "test": "node --test test/*.test.mjs",
     "version": "node scripts/stamp-banners.mjs && git add src/"
   },
   "main": "./src/index.js",
@@ -12,6 +13,7 @@
     ".": {
       "import": "./src/index.js"
     },
+    "./node": "./src/node.js",
     "./dates": "./src/dates.js",
     "./fetch": "./src/fetch.js",
     "./template": "./src/template.js",
