@@ -2,7 +2,7 @@
 #
 #   jobs:
 #     sync:
-#       uses: copperdesign/gCal/.github/workflows/sync.yml@v0.2.0
+#       uses: copperdesign/gCal/.github/workflows/sync.yml@v0.3.0
 #       with:
 #         config: gcal.config.json
 #       secrets:
@@ -71,10 +71,24 @@ on:
       api-key:
         description: 'Server-side Google API key, restricted to the Calendar API'
         required: true
+    # A reusable workflow needs outputs declared at BOTH levels: here, on
+    # `workflow_call`, and again on the job below. Job outputs alone are
+    # invisible to the caller — `needs.sync.outputs.changed` reads the
+    # value mapped here, not the one on the job.
+    outputs:
+      changed:
+        description: "'true' when the artifact changed and was committed, 'false' otherwise. Gate a deploy job on this."
+        value: ${{ jobs.sync.outputs.changed }}
+      events:
+        description: 'Number of events in the artifact, or empty when no artifact exists.'
+        value: ${{ jobs.sync.outputs.events }}
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.commit.outputs.changed }}
+      events:  ${{ steps.commit.outputs.events }}
     # Needed to push the commit. The repo default token is read-only.
     permissions:
       contents: write
@@ -104,6 +118,7 @@ jobs:
       # everything: `git add -A` in a job with write permission would
       # happily sweep up anything else the runner touched.
       - name: Commit if the calendar changed
+        id: commit
         env:
           COMMIT_MESSAGE: ${{ inputs.commit-message }}
         run: |
@@ -114,8 +129,19 @@ jobs:
             # The sync exited 0 without writing — a failed fetch with no
             # artifact to fall back on. It already said so on stderr.
             echo "No artifact at $out — nothing to commit."
+            # Every exit path sets `changed`. Leaving it unset on one branch
+            # would hand the caller an empty string, and `if: … == 'true'`
+            # would still skip the deploy — right answer, wrong reason, and
+            # it breaks the moment someone writes `!= 'false'`.
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "events=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          # Counted from the artifact rather than scraped from the CLI's
+          # stdout: the log line is for humans and may be reworded, but the
+          # file shape is the versioned contract.
+          echo "events=$(node -p "JSON.parse(require('fs').readFileSync('$out','utf8')).events.length")" >> "$GITHUB_OUTPUT"
 
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -133,9 +159,11 @@ jobs:
           git add -- "$out"
           if git diff --cached --quiet -- "$out"; then
             echo "Calendar unchanged — nothing to commit, no build triggered."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           git commit -m "$COMMIT_MESSAGE"
           git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
           echo "Committed $out."

@@ -26,6 +26,8 @@ import {
   escapeHtml,
   escapeAttr,
   formatEventDates,
+  inclusiveEndDate,
+  plainText,
   SCHEMA_VERSION,
 } from '../src/node.js';
 
@@ -274,6 +276,108 @@ test('formatEventDates works under Node ICU with German month names', () => {
   assert.equal(dates.startTime, '19:00');
   // Guards against a small-ICU runtime silently falling back to English.
   assert.ok(dates.dates.includes('Juni'), `expected German month, got "${dates.dates}"`);
+});
+
+/* ── inclusive end dates ─────────────────────────────────────────────── */
+
+test('inclusiveEndDate shifts an all-day end back to the last covered day', () => {
+  // Google's contract: a one-day event on the 5th reports the 6th.
+  assert.equal(inclusiveEndDate({ end: { date: '2026-09-06' } }), '2026-09-05');
+  assert.equal(inclusiveEndDate({ end: { date: '2026-10-15' } }), '2026-10-14');
+});
+
+test('inclusiveEndDate crosses month and year boundaries', () => {
+  // Naive string arithmetic on the day component fails both of these.
+  assert.equal(inclusiveEndDate({ end: { date: '2026-10-01' } }), '2026-09-30');
+  assert.equal(inclusiveEndDate({ end: { date: '2027-01-01' } }), '2026-12-31');
+  assert.equal(inclusiveEndDate({ end: { date: '2028-03-01' } }), '2028-02-29');
+});
+
+test('inclusiveEndDate leaves timed events untouched', () => {
+  // Only `date` is exclusive. Shifting a `dateTime` would move every timed
+  // event back a day.
+  const dt = '2026-06-12T21:00:00+02:00';
+  assert.equal(inclusiveEndDate({ end: { dateTime: dt } }), dt);
+});
+
+test('inclusiveEndDate is stable across host time zones', () => {
+  // The helper is used at build time, and a build machine in Los Angeles
+  // must produce the same artifact as one in Berlin.
+  const original = process.env.TZ;
+  try {
+    for (const tz of ['UTC', 'Europe/Berlin', 'America/Los_Angeles', 'Pacific/Kiritimati']) {
+      process.env.TZ = tz;
+      assert.equal(inclusiveEndDate({ end: { date: '2026-09-06' } }), '2026-09-05', `TZ=${tz}`);
+    }
+  } finally {
+    process.env.TZ = original;
+  }
+});
+
+test('inclusiveEndDate accepts a normalized event and tolerates a missing end', () => {
+  const normalized = normalizeEvents(fixture).find((e) => e.allDay);
+  assert.match(inclusiveEndDate(normalized), /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(inclusiveEndDate({}), '');
+  assert.equal(inclusiveEndDate(), '');
+});
+
+test('formatEventDates renders a single-day all-day event as one date', () => {
+  // The 0.3.0 behaviour change. Before, this read "15. Juni bis 16. Juni".
+  const d = formatEventDates(
+    { start: { date: '2026-06-15' }, end: { date: '2026-06-16' } },
+    { locale: 'de-DE', timeZone: 'Europe/Berlin' },
+  );
+  assert.equal(d.dates, '15. Juni 2026');
+  assert.equal(d.sameDay, true);
+  assert.equal(d.allDay, true);
+});
+
+test('formatEventDates keeps timed events off the inclusive shift', () => {
+  const d = formatEventDates({
+    start: { dateTime: '2026-06-15T22:00:00+02:00' },
+    end:   { dateTime: '2026-06-16T01:00:00+02:00' },
+  }, { locale: 'de-DE', timeZone: 'Europe/Berlin' });
+  assert.equal(d.sameDay, false);
+  assert.ok(d.dates.includes('16. Juni'), d.dates);
+});
+
+/* ── plain text ──────────────────────────────────────────────────────── */
+
+test('plainText strips tags and collapses whitespace', () => {
+  assert.equal(plainText('<p>Hello <b>world</b></p>'), 'Hello world');
+  assert.equal(plainText('one<br>two<br/>three'), 'one two three');
+  assert.equal(plainText('<p>a</p><p>b</p>'), 'a b');
+});
+
+test('plainText decodes the entities Google actually emits', () => {
+  assert.equal(plainText('rock &amp; roll'), 'rock & roll');
+  assert.equal(plainText('a&nbsp;b'), 'a b');
+  assert.equal(plainText('&quot;quoted&quot; and &#39;quoted&#39;'), '"quoted" and \'quoted\'');
+});
+
+test('plainText passes through named entities it does not claim to decode', () => {
+  // Deliberate scope, not an oversight: Google emits literal UTF-8 for
+  // accented characters, so the six entities above are what actually turn
+  // up. Pinning this stops someone "fixing" it with a full HTML entity
+  // table the library has no reason to carry.
+  assert.equal(plainText('Fr&uuml;hst&uuml;ck'), 'Fr&uuml;hst&uuml;ck');
+  assert.equal(plainText('Frühstück'), 'Frühstück');
+});
+
+test('plainText decodes &amp; last so escaped markup stays literal', () => {
+  // `&amp;lt;` is a literal "&lt;" in the source text. Decoding &amp; first
+  // would turn it into "<" — silently inventing markup that was never there.
+  assert.equal(plainText('&amp;lt;script&amp;gt;'), '&lt;script&gt;');
+});
+
+test('plainText strips tags before decoding, so escaped tags survive as text', () => {
+  assert.equal(plainText('&lt;b&gt;not bold&lt;/b&gt;'), '<b>not bold</b>');
+});
+
+test('plainText handles empty and missing input', () => {
+  assert.equal(plainText(''), '');
+  assert.equal(plainText(), '');
+  assert.equal(plainText('   \n  '), '');
 });
 
 /* ── pagination ──────────────────────────────────────────────────────── */

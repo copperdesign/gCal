@@ -121,6 +121,20 @@ const data = {
 };
 ```
 
+> **Changed in 0.3.0 — all-day events print one day shorter.** Google's
+> all-day `end.date` is exclusive: a single-day event on 15 June reports
+> `end.date: "2026-06-16"`. Earlier versions passed that straight through,
+> so `dates` read `"15. Juni bis 16. Juni 2026"` for an event covering one
+> day, and `sameDay` was `false`. It now reads `"15. Juni 2026"` with
+> `sameDay: true`; a 15–17 June event reads `"15. Juni bis 17. Juni 2026"`
+> instead of `"…bis 18. Juni"`.
+>
+> Being faithful to the wire format meant being wrong to every human
+> reading the page, and every consumer was correcting it in
+> `transformEvent`. **If you wrote such a correction, remove it** — it will
+> now shift the date a second day. Timed events are unaffected: only
+> `date` is exclusive, `dateTime` is not.
+
 ## Configuration
 
 ```js
@@ -425,7 +439,9 @@ does the same work on your build machine instead.
   consent to.
 - **The events actually exist in the HTML.** Client-side, the shipped
   page contains an empty `<div>`. Search crawlers, LLMs, and a screen
-  reader before opt-in all see nothing. This is often the bigger win.
+  reader before opt-in all see nothing. This is often the bigger win, and
+  it's what makes [`schema.org/Event` markup](#structured-data-schemaorgevent)
+  possible at all.
 - **No API key in page source.** The key lives in a CI secret.
 - **One API call per day, not per visitor.**
 
@@ -446,6 +462,8 @@ import {
   renderEventsToString, // → HTML
   escapeHtml, escapeAttr,
   formatEventDates,     // same formatter the browser path uses
+  inclusiveEndDate,     // → the last date an event actually covers
+  plainText,            // → HTML description flattened to text
 } from '@copperdesign/gcal/node';
 ```
 
@@ -517,26 +535,32 @@ const html = renderEventsToString(events, {
   row: (event, i, all) => {
     const d = formatEventDates(event, { locale: 'de-DE', timeZone: 'Europe/Berlin' });
     const continuous = i > 0 && dayKey(all[i - 1]) === dayKey(event);
+
+    // Omit empty nodes rather than emitting them hollow — this is the
+    // build-time equivalent of `data-remove-empty` in the browser template.
     const time = event.allDay ? '' :
-      `<div class="gcal-time">${escapeHtml(d.startTime)} bis ${escapeHtml(d.endTime)} Uhr</div>`;
+      `<p class="gcal-time">${escapeHtml(d.startTime)} bis ${escapeHtml(d.endTime)} Uhr</p>`;
+    const description = event.description
+      ? `<div class="gcal-description">${event.description}</div>`
+      : '';
     const location = event.location
-      ? `<div class="gcal-location"><b>Ort:</b> <a href="https://maps.google.com/maps?q=${
-          encodeURIComponent(event.location)}">${escapeHtml(event.location)}</a></div>`
+      ? `<p class="gcal-location"><b>Ort:</b> <a href="https://maps.google.com/maps?q=${
+          encodeURIComponent(event.location)}">${escapeHtml(event.location)}</a></p>`
       : '';
 
-    return `<div class="gcal-row${continuous ? ' gcal-continuous-day' : ''}">
-      <div class="gcal-cal"><div class="gcal-day">
-        <div class="gcal-dm">${escapeHtml(d.startMonth)}</div>
-        <div class="gcal-dd">${escapeHtml(d.startDay)}</div>
-        <div class="gcal-dy">${escapeHtml(d.startYear)}</div>
-      </div></div>
+    return `<article class="gcal-row${continuous ? ' gcal-continuous-day' : ''}">
+      <time class="gcal-day" datetime="${escapeAttr(event.start.date ?? event.start.dateTime)}">
+        <span class="gcal-dm">${escapeHtml(d.startMonth)}</span>
+        <span class="gcal-dd">${escapeHtml(d.startDay)}</span>
+        <span class="gcal-dy">${escapeHtml(d.startYear)}</span>
+      </time>
       <div class="gcal-info">
         ${time}
-        <h3 class="gcal-title">${escapeHtml(event.summary)}</h3>
-        <div class="gcal-description">${event.description}</div>
+        <h2 class="gcal-title">${escapeHtml(event.summary.trim())}</h2>
+        ${description}
         ${location}
       </div>
-    </div>`;
+    </article>`;
   },
 });
 ```
@@ -544,12 +568,169 @@ const html = renderEventsToString(events, {
 Same CSS as the browser recipe — the class contract is identical, so a
 site can move from one path to the other without touching its stylesheet.
 
+Four details in there are deliberate, and they're the reason to start from
+this snippet rather than a `<div>` soup of your own:
+
+- **`<time datetime="…">`** carries the machine-readable date. The browser
+  renderer *can't* do this — [one binding per node](#template-binding)
+  forbids putting both a `datetime` attribute and a text label on the same
+  element — so this is a real capability you only get at build time. Take
+  it.
+- **`<article>` and `<h2>`** over `<div>` and `<h3>`. Pick the heading level
+  that doesn't skip one relative to your page's `<h1>`; if the listing sits
+  directly under the page title, that's `<h2>`. Heading structure is the
+  cheapest strong signal you can give a crawler or a screen reader, and it
+  is the single thing most often got wrong in generated markup.
+- **Empty nodes are omitted**, not emitted hollow. Most calendars have no
+  description on most events.
+- **`summary.trim()`** — Google's UI silently swallows leading whitespace in
+  a title, so calendars accumulate it. It renders as a visibly indented
+  heading.
+
 **On escaping:** `summary` and `location` are text and must be escaped.
 `description` is deliberately *not* — Google returns real HTML in that
 field, and escaping it would visibly break every event that uses
 formatting. That asymmetry is intentional; treat `description` as
 trusted content from your own calendar, because that's what it is. Use
 `escapeAttr` for anything interpolated into an attribute value.
+
+### Structured data (`schema.org/Event`)
+
+Rendering server-side is what makes this possible at all — you can't
+usefully emit JSON-LD for events that only exist after a client-side
+fetch. It is also most of the reason to bother moving.
+
+The library does **not** emit this for you, and won't: markup is the
+consumer's business, same as everywhere else here. What follows is a
+correct starting point and, more importantly, the two things that
+silently make it worthless.
+
+#### `location` is required, not recommended
+
+> **Google will not surface an event without a `location`.** Not "less
+> prominently" — at all. It sits alongside `name` and `startDate` as a
+> required property, and everything else on this page is wasted effort
+> until it's populated.
+
+This bites harder than it sounds, because of how people actually keep
+calendars. A calendar maintained by a human for humans routinely puts the
+venue in the **title** —
+
+> `Kultur im Koffer: Die Beatles. Kirchengemeinde Schiffbek und Öjendorf`
+
+— and leaves Google's own **Location** field empty. That reads perfectly
+in the Calendar UI and on your rendered page, and it is invisible to a
+crawler, which sees one opaque string. The first real site to run this
+path had venues in the title on **10 of 10 events** and `location` set on
+**none** of them.
+
+So before writing any of the markup below, check the data:
+
+```js
+const { events } = JSON.parse(await readFile('src/content/kalender.json', 'utf8'));
+const missing = events.filter((e) => !e.location).length;
+if (missing) console.warn(`gcal: ${missing}/${events.length} events have no location — not eligible for Google Events`);
+```
+
+If that number isn't zero, the fix is in the calendar, not in your build.
+Worth putting in front of whoever maintains it before you ship anything
+that depends on it.
+
+#### All-day `endDate` is off by one
+
+Google's all-day `end.date` is **exclusive** — a one-day event on the 5th
+comes back as `end.date: "2026-09-06"`. schema.org's `endDate` is
+**inclusive**. Publish the raw value and every event is advertised as a
+day longer than it is: a wrong date in a rich result, which is worse than
+no rich result. Timed events need no correction.
+
+Since 0.3.0 this ships from `/node`, so it doesn't have to be rewritten
+per site:
+
+```js
+import { inclusiveEndDate } from '@copperdesign/gcal/node';
+
+inclusiveEndDate({ end: { date: '2026-09-06' } });   // → '2026-09-05'
+inclusiveEndDate({ end: { dateTime: '2026-06-12T21:00:00+02:00' } });
+                                                     // → unchanged
+```
+
+It takes a raw or a normalized event — `end` alone is authoritative — and
+returns `''` when there's no end at all.
+
+**The rendered output needs no correction of its own.** `formatEventDates`
+applies the same shift internally as of 0.3.0, so a one-day event prints
+as `"15. Juni 2026"` rather than a two-day range. This helper is for the
+places you build from normalized events directly, JSON-LD being the main
+one.
+
+#### The block
+
+```js
+// Appended after the rows, inside the same generated partial.
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'ItemList',                                    // a listing page, so ItemList
+  itemListOrder: 'https://schema.org/ItemListOrderAscending',
+  numberOfItems: events.length,
+  itemListElement: events.map((event, i) => ({
+    '@type': 'ListItem',
+    position: i + 1,
+    item: {
+      '@type': 'Event',
+      name:      event.summary.trim(),                     // required
+      startDate: event.start.dateTime ?? event.start.date, // required
+      location:  event.location                            // required — see above
+        ? { '@type': 'Place', name: event.location }
+        : undefined,
+      endDate:   inclusiveEndDate(event),
+      eventStatus: 'https://schema.org/EventScheduled',
+      eventAttendanceMode: 'https://schema.org/OfflineEventAttendanceMode',
+      url:   `https://example.com/termine#${anchorFor(event)}`,
+      image: 'https://example.com/assets/og-default.jpg',
+      description: plainText(event.description) || undefined,
+      performer: { '@id': 'https://example.com/#person' },
+    },
+  })),
+};
+
+const html = `${rows}\n<script type="application/ld+json">\n${
+  JSON.stringify(jsonLd, null, 2)}\n</script>`;
+```
+
+`plainText` ships from `/node` as of 0.3.0 — import it alongside
+`inclusiveEndDate`. It strips tags, decodes the entities Google actually
+emits (`&amp;` `&lt;` `&gt;` `&quot;` `&#39;` `&nbsp;`), and collapses
+whitespace. Accented characters come back as literal UTF-8 from Google, so
+a full entity table isn't carried; anything else passes through untouched.
+
+`anchorFor` is still yours to write — a slug from the date plus the title.
+It stays out of the library because the shape of an anchor is a URL
+decision, and URLs are the consumer's namespace.
+
+Notes on the properties that aren't obvious:
+
+- **`description` needs to be plain text.** `event.description` is HTML by
+  design (see the escaping note above), and HTML in a JSON-LD string
+  property is wrong. Strip tags and decode entities.
+- **`url` wants a per-event target.** A dedicated page per event is what
+  Google actually prefers; a fragment anchor on the listing (`#…`) is the
+  cheap version and is much better than omitting it. Don't generate a page
+  per event *just* for this if the events carry nothing but a title and a
+  date — thin pages are their own problem.
+- **`image` is recommended and matters.** If there's no per-event artwork,
+  a single site-wide fallback is legitimate.
+- **`performer` yes, `organizer` usually no.** For an author's readings the
+  venue organizes and the author performs. Asserting both because both
+  fields exist is a false statement in machine-readable form, which is
+  worse than an absent optional property.
+- **`undefined` values disappear** through `JSON.stringify`, so the
+  conditionals above need no extra guarding.
+
+Validate the result against the
+[Rich Results Test](https://search.google.com/test/rich-results) once
+real data is flowing — `location` in particular fails loudly there, which
+is the fastest way to get the calendar fixed.
 
 ## Nightly sync with GitHub Actions
 
@@ -599,7 +780,7 @@ on:
 
 jobs:
   sync:
-    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.2.0
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.3.0
     with:
       config: gcal.config.json
     secrets:
@@ -618,6 +799,42 @@ that's too stale — and on a calendar-led site it usually is — see
 [instant updates](#instant-updates-let-the-calendar-trigger-the-sync),
 which trades the cron for a trigger fired by the calendar itself. It's
 both faster and cheaper in Actions minutes than a tighter cron.
+
+### Outputs: gating your own deploy
+
+The workflow syncs and commits, and stops there — baking a deploy in
+would tie it to one host. What it does hand back is what it already
+knows, so your pipeline can decide for itself:
+
+| Output | Value |
+|---|---|
+| `changed` | `'true'` when the artifact changed and was committed, `'false'` otherwise |
+| `events` | Number of events in the artifact; empty when no artifact exists |
+
+```yaml
+jobs:
+  sync:
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.3.0
+    with:     { config: gcal.config.json }
+    secrets:  { api-key: ${{ secrets.GCAL_API_KEY }} }
+
+  deploy:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # …your build and deploy, whatever the host
+```
+
+That keeps the separation intact — the workflow still has no idea what a
+deploy is — while removing the reason to fork it. On a quiet night the
+`deploy` job is skipped outright rather than rebuilding and re-uploading
+bytes that didn't move.
+
+`changed` is `'true'` only after the push succeeds. If the push fails the
+job fails, and a deploy gated on the output correctly doesn't run — the
+branch doesn't have the artifact, so there is nothing to deploy yet.
 
 ### Fail-soft: a bad night at Google must not fail your build
 
@@ -808,7 +1025,7 @@ on:
 
 jobs:
   sync:
-    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.2.0
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.3.0
     with:
       config: gcal.config.json
     secrets:
@@ -829,12 +1046,24 @@ deploy in the same job. The `GITHUB_TOKEN` restriction described above
 simply stops applying — no scheduling gap to tune, no waiting for the
 deploy's own cron.
 
-Deploying unconditionally in that run is correct rather than wasteful,
-because the run only exists at all if the calendar changed. (Two
-exceptions where the artifact can still come out byte-identical: an edit
-outside the fetch window, or a field the serializer doesn't carry.
-They're rare; if you're on Firebase and its retention quota, keep the
-fingerprint gate from the host notes below anyway.)
+**Gate the deploy on `changed` anyway.** It's tempting to deploy
+unconditionally in a dispatch run on the grounds that the run only exists
+because the calendar changed — but a dispatched run producing a
+byte-identical artifact is *common*, not a rare edge case. The trigger
+fires on any calendar edit at all, while the artifact carries only the
+eight fields in `EVENT_FIELDS`. Add a guest, change an event's colour,
+set a reminder, edit something outside the fetch window: the trigger
+fires, the artifact doesn't move. The nightly backstop run is the same
+story by definition.
+
+So the two mechanisms do different jobs and you want both — the trigger
+decides *how often you run*, `changed` decides *whether you deploy*:
+
+```yaml
+  deploy:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+```
 
 > **Check out the branch tip, not the triggering commit.** For a
 > `repository_dispatch` event, `github.sha` is the default branch as it
@@ -881,15 +1110,27 @@ it. What differs is what your host does next.
 **Firebase Hosting.** Two extra considerations, both real:
 
 1. The scheduling gap above applies, since deploys run in Actions.
-2. **Gate your deploy on whether the payload changed.** Hosting retains
-   every deployed version and each counts in full against the 10 GB
-   storage quota, with no cross-version dedup. An unconditional nightly
-   deploy adds 365 versions a year and will exhaust it. Fingerprint what
-   you'd upload, key an `actions/cache` entry on that hash, and deploy
-   only on a miss — the determinism guarantee above is what makes the
-   fingerprint stable on a quiet night. Take the fingerprint *before* any
-   build step that stamps a date into your output, or it changes every
-   night by construction.
+2. **Gate your deploy on `changed`.** Hosting retains every deployed
+   version and each counts in full against the 10 GB storage quota, with
+   no cross-version dedup. An unconditional nightly deploy adds 365
+   versions a year — for a 13 MB site that's ~4.7 GB of identical bytes
+   annually, and the Spark plan is gone in about two years of nothing
+   happening. One `if:` prevents all of it:
+
+   ```yaml
+     deploy:
+       needs: sync
+       if: needs.sync.outputs.changed == 'true'
+   ```
+
+   Earlier versions of this note recommended fingerprinting the payload
+   and keying an `actions/cache` entry on the hash. That works, but it's a
+   lot of machinery for something an output does for free — and it has a
+   trap: if your build stamps a date or a commit SHA into its output (a
+   footer, a meta tag), the fingerprint changes every night by
+   construction and the gate never closes. You'd have to hash the build
+   *inputs* instead, which is fiddly to get right. Gate on `changed`
+   instead; it's decided before any of your build steps run.
 
 **Cloudflare Pages.** Simpler, as it happens: no scheduling gap (see
 above), and no retention quota of Firebase's kind — the relevant free

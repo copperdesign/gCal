@@ -50,18 +50,21 @@
     check('buildEventsUrl defaults singleEvents=true', url.includes('singleEvents=true'));
 
     // 2. formatEventDates — all-day, end.date is exclusive (Google's contract).
-    // A "single day" all-day event on 15 June has end.date = 16 June. The
-    // library renders this faithfully as a range; consumers wanting inclusive
-    // display ("15. Juni 2026") override via transformEvent. See test 4 for
-    // the multi-day case that documents the same convention.
+    // A "single day" all-day event on 15 June has end.date = 16 June. Since
+    // 0.3.0 the renderer shifts that back to the last day the event actually
+    // covers, so this reads as a single date rather than a two-day range.
+    // Before 0.3.0 it rendered "15. Juni bis 16. Juni 2026" and every
+    // consumer corrected it via transformEvent. See test 4 for the multi-day
+    // case, and test 4b for the timed case that must NOT shift.
     {
       const d = formatEventDates(
         { start: { date: '2026-06-15' }, end: { date: '2026-06-16' } },
         { locale: 'de-DE', timeZone: 'Europe/Berlin' }
       );
-      check('all-day "single day" (exclusive end) renders as "15. Juni bis 16. Juni 2026"',
-            d.dates === '15. Juni bis 16. Juni 2026', d.dates);
+      check('all-day single day (exclusive end) renders as "15. Juni 2026"',
+            d.dates === '15. Juni 2026', d.dates);
       check('all-day flag set', d.allDay === true);
+      check('single day collapses to sameDay', d.sameDay === true);
     }
 
     // 3. formatEventDates — timed, same day, different times
@@ -82,11 +85,24 @@
         { start: { date: '2026-06-15' }, end: { date: '2026-06-18' } },
         { locale: 'de-DE', timeZone: 'Europe/Berlin' }
       );
-      // Google's all-day `end.date` is exclusive — the renderer keeps it
-      // faithful (so this reads as "15. Juni bis 18. Juni"); if a consumer
-      // wants inclusive display they can override via transformEvent.
-      check('multi-day all-day: "15. Juni bis 18. Juni 2026"',
-            d.dates === '15. Juni bis 18. Juni 2026', d.dates);
+      // Google reports end.date = the 18th for an event running the 15th
+      // to the 17th. The shift makes the printed range match the days the
+      // event actually covers.
+      check('multi-day all-day: "15. Juni bis 17. Juni 2026"',
+            d.dates === '15. Juni bis 17. Juni 2026', d.dates);
+    }
+
+    // 4b. The shift must apply to all-day events ONLY. `dateTime` is not
+    // exclusive, and subtracting a day here would move every timed event
+    // that ends after midnight back by one.
+    {
+      const d = formatEventDates({
+        start: { dateTime: '2026-06-15T22:00:00+02:00' },
+        end:   { dateTime: '2026-06-16T01:00:00+02:00' },
+      }, { locale: 'de-DE', timeZone: 'Europe/Berlin' });
+      check('timed event crossing midnight keeps its real end date',
+            d.dates === '15. Juni bis 16. Juni 2026 um 22:00 bis 01:00 Uhr', d.dates);
+      check('timed crossing midnight is not sameDay', d.sameDay === false);
     }
 
     // 5. Template renderer

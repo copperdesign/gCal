@@ -37,6 +37,11 @@ function isAllDay(start, end) {
   return !start.dateTime || !end.dateTime;
 }
 
+// One day in ms. Safe to subtract from a parsed `YYYY-MM-DD` because that
+// form parses as UTC midnight, and UTC has no DST — so this always lands
+// on the previous UTC midnight rather than 23:00 the same day.
+const DAY_MS = 86_400_000;
+
 /**
  * Build Intl formatters once per (locale, timeZone) pair and reuse.
  * Constructing Intl.DateTimeFormat is non-trivial; caching matters
@@ -88,9 +93,18 @@ export function formatEventDates(event, options = {}) {
 
   const startSrc = extractDate(event.start);
   const endSrc   = extractDate(event.end);
-  const start = new Date(startSrc);
-  const end   = new Date(endSrc);
   const allDay = isAllDay(event.start, event.end);
+  const start = new Date(startSrc);
+  // All-day `end.date` is EXCLUSIVE in Google's data model — a single-day
+  // event on the 15th comes back as `end.date: "2026-06-16"`. Until 0.3.0
+  // this renderer passed that through faithfully, which printed
+  // "15. Juni bis 16. Juni 2026" for an event that covers one day. Being
+  // faithful to the wire format meant being wrong to every human reading
+  // the page, and every consumer had to correct it via `transformEvent`.
+  // A default that everyone overrides is the wrong default, so the shift
+  // happens here, once. Timed events are untouched — only `date` is
+  // exclusive, `dateTime` is not.
+  const end = new Date(allDay ? Date.parse(endSrc) - DAY_MS : endSrc);
 
   const fmt = getFormatters(locale, timeZone);
 

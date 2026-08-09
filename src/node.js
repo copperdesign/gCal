@@ -279,3 +279,72 @@ export function escapeHtml(value = '') {
 export function escapeAttr(value = '') {
   return escapeHtml(value).replace(/"/g, '&quot;');
 }
+
+// One day in ms. See `inclusiveEndDate` for why UTC parsing makes this safe.
+const DAY_MS = 86_400_000;
+
+/**
+ * The last date an event actually covers, as `YYYY-MM-DD` (all-day) or
+ * the raw `dateTime` (timed).
+ *
+ * Google's all-day `end.date` is EXCLUSIVE: an event on the 5th reports
+ * `end.date: "2026-09-06"`. schema.org's `endDate` is INCLUSIVE. Publish
+ * the raw value into JSON-LD and every date is advertised a day longer
+ * than it is — a wrong date in a rich result, which is worse than no
+ * rich result at all.
+ *
+ * This is the same argument that puts `allDay` on a normalized event:
+ * derive the sharp edge once here, rather than have each consuming site
+ * write its own version and get it subtly wrong. The failure mode is
+ * what makes it worth exporting — nothing throws, nothing looks broken,
+ * the date is just quietly off by one on a live page.
+ *
+ * Accepts a raw Google event or a normalized one; `end` alone is
+ * authoritative, so it doesn't need `start`.
+ *
+ * `YYYY-MM-DD` parses as UTC midnight, so the subtraction lands on the
+ * previous UTC midnight and `slice(0, 10)` reads back the intended
+ * calendar date regardless of the host's local zone.
+ */
+export function inclusiveEndDate(event = {}) {
+  const end = event.end ?? {};
+  if (end.dateTime) return end.dateTime;
+  if (!end.date) return '';
+  return new Date(Date.parse(`${end.date}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
+}
+
+/**
+ * HTML → plain text, for `<meta name="description">`, OG tags, JSON-LD
+ * and any other text-only surface.
+ *
+ * The inverse of `escapeHtml`, and here for the same stated reason: it's
+ * small, everyone doing structured data needs it, and everyone writes it
+ * slightly differently. `description` is real HTML by design — see the
+ * escaping asymmetry in the README — so flattening it is a step every
+ * consumer hits, not an edge case.
+ *
+ * Two ordering decisions that are easy to get backwards:
+ *   · Tags are stripped BEFORE entities are decoded, so an escaped
+ *     `&lt;script&gt;` in the calendar text survives as literal text
+ *     instead of being decoded into a tag and then stripped.
+ *   · `&amp;` is decoded LAST, so `&amp;lt;` yields the literal `&lt;`
+ *     rather than being double-decoded into `<`.
+ *
+ * Not a sanitizer, and not trying to be — the output is text, so there
+ * is nothing left to sanitize.
+ */
+export function plainText(html = '') {
+  return String(html)
+    // Block boundaries become spaces first, or adjacent lines run together.
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/(?:p|div|li|tr|h[1-6])>/gi, ' ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
