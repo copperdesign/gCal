@@ -613,6 +613,12 @@ Your repo needs `@copperdesign/gcal` as a dependency, a
 Prefer to own it? `npx gcal-sync --config gcal.config.json` is the whole
 job; run it from a workflow of your own.
 
+A nightly cron means an edit made this morning appears tomorrow. If
+that's too stale — and on a calendar-led site it usually is — see
+[instant updates](#instant-updates-let-the-calendar-trigger-the-sync),
+which trades the cron for a trigger fired by the calendar itself. It's
+both faster and cheaper in Actions minutes than a tighter cron.
+
 ### Fail-soft: a bad night at Google must not fail your build
 
 By default, a failed fetch **logs, leaves the committed artifact
@@ -675,6 +681,197 @@ committing workflow from re-triggering itself forever — but it means
 >
 > The default message (`chore: sync calendar`) is safe. If you override
 > `commit-message`, keep it clear of those markers.
+
+### Instant updates: let the calendar trigger the sync
+
+A nightly cron means an event added at 09:00 doesn't show up until
+tomorrow. For a site whose calendar *is* the content, that's usually the
+wrong trade — and the fix is cheaper than tightening the cron, not more
+expensive.
+
+**Polling is the costly architecture.** GitHub Free includes 2,000
+Actions minutes a month on private repositories (public repos are
+unmetered), billed per run and rounded up. A sync run — checkout,
+`setup-node`, `npm ci`, fetch — is one to two billable minutes. So a
+`*/15` cron burns 2,000–4,000 minutes a month to discover, almost every
+time, that nothing changed. Hourly costs 500–1,000. Both spend the quota
+on *asking*.
+
+A push-triggered sync runs only when the calendar actually changes — ten
+to twenty times a month for a typical site, so twenty to forty minutes,
+and near-instant instead of up to a day stale. Cheaper *and* faster,
+which is why this is the recommended shape on a private repo.
+
+#### Why not Google's own push notifications?
+
+The Calendar API does have [push notifications](https://developers.google.com/workspace/calendar/api/guides/push)
+(`events.watch`). They're the wrong tool here, on three counts:
+
+- **OAuth 2.0 is required.** A watch request needs a bearer token for a
+  user who owns or can access the resource. This library's entire auth
+  model is a restricted API key against a *public* calendar.
+- **You must run an HTTPS server** with a valid, trusted certificate to
+  receive them — the runtime dependency this whole approach exists to
+  remove.
+- **Channels expire, with no auto-renew.** In Google's words: "there's no
+  automatic way to renew a notification channel." You would need a cron
+  to re-`watch` — a cron, plus a server, plus OAuth, in order to avoid a
+  cron.
+
+Worth knowing either way: the notification carries no body. It's a bare
+ping, and you still call the API for the data. Push only ever replaces
+the *trigger*, never the work.
+
+#### Apps Script instead: Google-native, nothing to host
+
+Apps Script has an `onEventUpdated` installable trigger that fires when a
+calendar entry is created, edited, or deleted. Apps Script *is* the
+hosted runtime, so there's nothing to deploy or keep alive, and it runs
+as an authorized Google user — the OAuth problem collapses into clicking
+*Allow* once. It's free: the consumer-account budget is 90 minutes of
+total trigger runtime per day, against a script that runs for about a
+second.
+
+Like Google's own push, the trigger reports *that* the calendar changed,
+not what changed. That suits us exactly — the sync refetches wholesale
+anyway.
+
+**1. The script.** A new project at [script.google.com](https://script.google.com):
+
+```js
+/** Ping GitHub so the sync workflow runs now instead of tonight. */
+function notifyGitHub() {
+  const props = PropertiesService.getScriptProperties();
+  const repo  = props.getProperty('GITHUB_REPO');   // "owner/name"
+  const token = props.getProperty('GITHUB_TOKEN');
+
+  const res = UrlFetchApp.fetch(`https://api.github.com/repos/${repo}/dispatches`, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+    payload: JSON.stringify({ event_type: 'calendar-changed' }),
+    muteHttpExceptions: true,
+  });
+
+  // 204 No Content is success. Throwing on anything else is deliberate:
+  // a silent failure here looks exactly like "nobody edited the
+  // calendar", and you would never notice it.
+  const code = res.getResponseCode();
+  if (code !== 204) {
+    throw new Error(`GitHub dispatch failed: ${code} ${res.getContentText()}`);
+  }
+}
+
+/** Run once, by hand, to install the trigger. Safe to re-run. */
+function installTrigger() {
+  const calendarId = 'you@example.com';
+
+  // Clear our own triggers first — otherwise every run of this function
+  // stacks another one and the calendar dispatches N times per edit.
+  ScriptApp.getProjectTriggers()
+    .filter((t) => t.getHandlerFunction() === 'notifyGitHub')
+    .forEach((t) => ScriptApp.deleteTrigger(t));
+
+  ScriptApp.newTrigger('notifyGitHub')
+    .forUserCalendar(calendarId)
+    .onEventUpdated()
+    .create();
+}
+```
+
+**2. The credentials.** Project Settings → Script Properties, two entries:
+`GITHUB_REPO` (`owner/name`) and `GITHUB_TOKEN`. The token is a
+fine-grained PAT scoped to **that one repository**, with the
+**Contents: read and write** permission — that's what
+`POST /repos/{owner}/{repo}/dispatches` requires. Nothing else.
+
+**3. Install.** Run `installTrigger` once from the editor and approve the
+scopes (calendar read, script trigger management, external requests).
+
+**4. The workflow.** Add `repository_dispatch` to the wrapper from
+[the short version](#the-short-version), and keep the cron as a
+safety net:
+
+```yaml
+# .github/workflows/sync-calendar.yml
+name: Sync calendar
+on:
+  repository_dispatch:
+    types: [calendar-changed]   # matches event_type in the script
+  schedule:
+    - cron: '0 1 * * *'         # backstop, ~30 runs/month
+  workflow_dispatch:            # manual re-run
+
+jobs:
+  sync:
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.2.0
+    with:
+      config: gcal.config.json
+    secrets:
+      api-key: ${{ secrets.GCAL_API_KEY }}
+```
+
+Push for speed, cron for guaranteed convergence: if a trigger is ever
+missed or Apps Script disables it, the calendar is still correct within a
+day rather than silently never. That combination lands comfortably under
+100 minutes a month. The reusable workflow's concurrency group already
+serialises a dispatch that lands mid-cron, so the two triggers can't race
+each other.
+
+#### The bonus: the chaining problem disappears
+
+A dispatch-triggered run is *your* workflow run, so it can sync **and**
+deploy in the same job. The `GITHUB_TOKEN` restriction described above
+simply stops applying — no scheduling gap to tune, no waiting for the
+deploy's own cron.
+
+Deploying unconditionally in that run is correct rather than wasteful,
+because the run only exists at all if the calendar changed. (Two
+exceptions where the artifact can still come out byte-identical: an edit
+outside the fetch window, or a field the serializer doesn't carry.
+They're rare; if you're on Firebase and its retention quota, keep the
+fingerprint gate from the host notes below anyway.)
+
+> **Check out the branch tip, not the triggering commit.** For a
+> `repository_dispatch` event, `github.sha` is the default branch as it
+> was *when the event fired* — before the sync's commit exists. A deploy
+> job using a bare `actions/checkout` will therefore build the calendar
+> as it was **before** the edit that triggered the run, and look
+> perfectly healthy doing it. Pass the branch explicitly:
+>
+> ```yaml
+>   deploy:
+>     needs: sync
+>     runs-on: ubuntu-latest
+>     steps:
+>       - uses: actions/checkout@v6
+>         with:
+>           ref: ${{ github.event.repository.default_branch }}
+> ```
+
+#### Whose Google account runs it
+
+Cleanest is **yours**, not the client's: subscribe to their public
+calendar and point `forUserCalendar(calendarId)` at it, and they never
+have to touch a script, a token, or a Google consent screen. Verify the
+trigger genuinely fires for a subscribed calendar on your own setup
+before relying on it — if it doesn't, the script has to live in the
+calendar owner's account instead, which is a one-time setup rather than
+an ongoing burden.
+
+Two things to know before you rely on this:
+
+- **The PAT expires.** Fine-grained tokens cap at one year. When it
+  lapses the dispatch starts failing and edits stop appearing instantly —
+  the nightly cron keeps the site correct, which is the good news and
+  also why nobody notices. Put the rotation in a calendar.
+- **Apps Script disables triggers that keep failing**, emailing the
+  script's owner. Same story: the cron covers you, so treat those emails
+  as real.
 
 ### Host notes
 
