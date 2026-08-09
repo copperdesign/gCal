@@ -1,16 +1,25 @@
-# Smoke-test the module on every push / PR.
+# Test and smoke-check the package on every push / PR.
 #
-# This is a browser ES module with zero runtime dependencies — it can't be
-# fully imported in plain Node because it touches DOM APIs (<template>,
-# document, custom events, etc.). The CI's job is therefore narrow:
-# confirm every source file still parses as a valid ES module, and that
-# the package metadata is internally consistent. Catches the usual
-# drive-by regressions: stray syntax error, unbalanced template literal,
-# broken `exports` map subpath, etc.
+# Two halves, because the package has two halves.
 #
-# No `npm install` step — the package declares no dependencies. Matrix
-# runs the LTS line on the off chance a future syntax addition trips an
-# older parser.
+# The BROWSER half (index.js, template.js, consent.js) touches DOM APIs
+# and can't be imported in plain Node, so all CI can do for it is confirm
+# every file still parses and that the package metadata is internally
+# consistent — stray syntax error, unbalanced template literal, broken
+# `exports` subpath. Its real smoke test is test/index.html, opened by
+# hand in a browser.
+#
+# The NODE half (src/node.js, bin/gcal-sync.mjs) is importable and
+# executable by design, so it gets a real test suite. The determinism
+# tests there are the ones that matter most: consumers commit the sync
+# artifact and gate their deploy on whether it changed, so a regression
+# doesn't look like a bug — it looks like a site that quietly redeploys
+# every night forever.
+#
+# Still no `npm install` — the package declares no runtime or dev
+# dependencies, and `node --test` is built in. The matrix runs the LTS
+# line, both for parser coverage and because `node --test` itself and
+# Intl's ICU data have moved between releases.
 
 name: CI
 
@@ -35,15 +44,26 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      - name: parse check (all src/*.js)
+      - name: parse check (src/*.js + bin/*.mjs)
         run: |
-          # node --check on every source file. A single broken file
-          # should fail the job loudly, not silently skip.
+          # node --check on every shipped source file. A single broken
+          # file should fail the job loudly, not silently skip.
+          # bin/ is included because it ships too — a syntax error there
+          # wouldn't surface until a consumer's nightly job ran.
           set -e
-          for f in src/*.js; do
+          for f in src/*.js bin/*.mjs; do
             echo "checking $f"
             node --check "$f"
           done
+
+      - name: test suite
+        run: |
+          # Covers the /node entry point and the gcal-sync CLI: import
+          # graph, determinism, DST handling, fail-soft behaviour, and
+          # what actually lands in the published tarball. No network —
+          # the CLI takes an injected fetcher precisely so this stays
+          # hermetic.
+          node --test test/*.test.mjs
 
       - name: banner versions match package.json
         run: |

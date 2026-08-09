@@ -59,13 +59,24 @@ jobs:
       # Smoke checks before publishing — same guards as ci.yml, inlined
       # so a release can't sneak past a broken parse. Cheaper than a
       # workflow dependency and keeps the release job self-contained.
-      - name: parse check (all src/*.js)
+      - name: parse check (src/*.js + bin/*.mjs)
         run: |
           set -e
-          for f in src/*.js; do
+          for f in src/*.js bin/*.mjs; do
             echo "checking $f"
             node --check "$f"
           done
+
+      - name: test suite
+        run: |
+          # Includes test/pack.test.mjs, which asserts every declared
+          # `exports` target actually lands in the tarball. The checks
+          # below verify the reverse — that declared entries exist on
+          # DISK — and would stay green while publishing a package whose
+          # exports map points at files the `files` allowlist excludes.
+          # That one is invisible until a consumer installs, so it
+          # belongs on the release path, not just in CI.
+          node --test test/*.test.mjs
 
       - name: banner versions match package.json
         run: |
