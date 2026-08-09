@@ -54,14 +54,15 @@ Environment:
                     the Calendar API. Never put it in the config file —
                     that file gets committed.
 
-Config file (JSON):
+Config file (strict JSON — no comments):
   {
     "calendarId": "you@example.com",
     "timeZone":   "Europe/Berlin",
-    "out":        "src/content/kalender.json",
-    "maxResults": 100,          // optional, page size
-    "timeMax":    "2027-01-01T00:00:00Z"   // optional
+    "out":        "src/content/kalender.json"
   }
+
+  Optional keys: "maxResults" (page size, default 100) and "timeMax"
+  (ISO 8601). "apiKey" is NOT a config key and is rejected if present.
 
 Exit codes:
   0  wrote the artifact, or it was already up to date, or the fetch

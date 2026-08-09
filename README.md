@@ -4,7 +4,7 @@
 [![bundle size](https://img.shields.io/bundlephobia/minzip/@copperdesign/gcal)](https://bundlephobia.com/package/@copperdesign/gcal)
 [![license](https://img.shields.io/npm/l/@copperdesign/gcal.svg)](./LICENSE)
 
-Render a public Google Calendar into HTML you control. Template-driven, locale-aware, consent-friendly. Zero dependencies, ESM only.
+Render a public Google Calendar into HTML you control — in the browser, or at build time. Template-driven, locale-aware, consent-friendly. Zero dependencies, ESM only.
 
 ```bash
 npm install @copperdesign/gcal
@@ -12,9 +12,13 @@ npm install @copperdesign/gcal
 
 ## What it does
 
-You point it at a public Google Calendar and an HTML `<template>`. It fetches events from the Calendar v3 API, clones the template per event, fills `data-slot` attributes with event fields, and appends them to a target element.
+Two modes, sharing one set of primitives.
 
-That's it. No framework, no virtual DOM, no jQuery. ~7KB unminified.
+**In the browser** (`@copperdesign/gcal`) you point it at a public Google Calendar and an HTML `<template>`. It fetches events from the Calendar v3 API, clones the template per event, fills `data-slot` attributes with event fields, and appends them to a target element. ~7KB unminified.
+
+**At build time** (`@copperdesign/gcal/node`) it fetches the calendar on your build machine instead, normalizes it into a byte-stable JSON file, and hands you a string renderer. Your site ships static markup: no consent gate, no API key in page source, events visible to crawlers and screen readers, and one API call per day rather than one per visitor. See [Server-side rendering](#server-side-rendering-ssg).
+
+Either way: no framework, no virtual DOM, no jQuery, no runtime dependencies.
 
 ## Quick start
 
@@ -57,6 +61,31 @@ Three things have to be in place before the library can fetch anything:
 
 Without the restrictions the key still works, but any visitor who copies it can use your project's quota from anywhere.
 
+### 4. A second key, for server-side use
+
+Only needed if you're using [server-side rendering](#server-side-rendering-ssg). Skip it for the browser path.
+
+**The referrer-restricted key above cannot be used from CI.** Node sends no `Referer` header, so Google rejects the request — and forging one isn't a restriction anyone should build on. Create a second key:
+
+- **API restrictions → Restrict key** → **Google Calendar API** only.
+- **Application restrictions → None.**
+
+Then store it as a repository secret, never in a config file:
+
+```sh
+gh secret set GCAL_API_KEY --repo <owner>/<repo>
+```
+
+**Why leaving the origin unrestricted is acceptable here, specifically:** the key grants read-only access to a calendar that is already public, and the free quota is roughly 1M requests/day against a workload of about 365 a year. It also never appears in page source, so unlike the browser key it can be rotated at any time without touching site source or waiting for a deploy — that's an improvement over the browser path, not a concession.
+
+**Once a site is fully server-side, delete the browser key.** It has no remaining caller, and a live key with your project's quota attached is not something to leave lying in git history.
+
+#### The ICS alternative, and why it isn't the recommendation
+
+Google also publishes a public calendar as an `.ics` feed, which needs no credentials at all — genuinely appealing if you'd rather not run a Cloud project.
+
+The catch is recurring events. The Calendar v3 API expands a recurring series into individual instances for you (`singleEvents=true`, which this library always sets); an ICS feed hands you `RRULE` strings and expects you to expand them yourself, correctly, including exceptions and DST. That is a real chunk of calendar logic to own for the sake of skipping one console visit. Considered and rejected — but if your calendar genuinely has no recurring events, it's a reasonable path to build yourself on top of `normalizeEvents`.
+
 ## Template binding
 
 The template is plain HTML inside a `<template>` element. Three attributes control rendering:
@@ -71,7 +100,7 @@ The template is plain HTML inside a `<template>` element. Three attributes contr
 Available fields after default formatting:
 
 ```js
-{
+const data = {
   // Direct from Google
   summary, description, location, htmlLink, start, end,
 
@@ -89,7 +118,7 @@ Available fields after default formatting:
   // Derived
   mapLink,      // Google Maps URL built from location, or '' if no location
   total,        // total event count in this render (useful for sizing)
-}
+};
 ```
 
 ## Configuration
@@ -263,6 +292,8 @@ For a sitewide stylesheet, move the `<link>` into **Settings → SEO → Header 
 
 If you need consent gating before the fetch (DSGVO), see [Consent flow](#consent-flow) above and pass a `consent` object alongside the other options.
 
+**Note:** [server-side rendering](#server-side-rendering-ssg) — which removes the need for consent entirely — is not available on this path. It needs a build step, and Weebly has none.
+
 ## Imperative API
 
 ```js
@@ -278,7 +309,7 @@ const unmount = cal.mount();
 unmount();
 
 // Pre-fetched items (SSR hydration, test fixtures)
-cal.renderItems([{ summary: '…', start: {…}, end: {…} }]);
+cal.renderItems([{ summary: '…', start: { dateTime: '…' }, end: { dateTime: '…' } }]);
 
 // Use the primitives directly
 const items = await fetchEvents({ calendarId, apiKey });
@@ -380,9 +411,315 @@ Events whose `location` field is empty drop the whole `gcal-location`
 block (via `data-remove-empty`), so authors can inline an "Ort:" line
 in the description for venues the calendar entry doesn't geocode.
 
+## Server-side rendering (SSG)
+
+Everything above runs in the visitor's browser. `@copperdesign/gcal/node`
+does the same work on your build machine instead.
+
+**Why you'd want that:**
+
+- **No consent gate.** The browser path sends the visitor's IP to Google,
+  which under § 25 TTDSG / GDPR needs informed consent — hence the
+  click-to-load button in [Consent flow](#consent-flow). Fetch at build
+  time and no visitor ever contacts Google, so there is nothing to
+  consent to.
+- **The events actually exist in the HTML.** Client-side, the shipped
+  page contains an empty `<div>`. Search crawlers, LLMs, and a screen
+  reader before opt-in all see nothing. This is often the bigger win.
+- **No API key in page source.** The key lives in a CI secret.
+- **One API call per day, not per visitor.**
+
+The trade: events change only when you rebuild. For a calendar of public
+appointments that's fine; for something updating hourly, stay client-side.
+
+> Not applicable to the [Weebly drop-in](#drop-in-weebly-no-build-step)
+> path — that has no build step to hook into.
+
+### The surface
+
+```js
+import {
+  fetchAllEvents,       // every page of the calendar (fetchEvents caps at one)
+  normalizeEvents,      // → a stable, minimal array
+  serializeArtifact,    // → the exact JSON text to write
+  startOfDay,           // → a timeMin that doesn't drift
+  renderEventsToString, // → HTML
+  escapeHtml, escapeAttr,
+  formatEventDates,     // same formatter the browser path uses
+} from '@copperdesign/gcal/node';
+```
+
+Nothing DOM-bound is reachable from this entry point, so it imports
+cleanly in plain Node 18+ with no shim.
+
+### Determinism, and why you should care
+
+`normalizeEvents` guarantees that **the same calendar produces the same
+bytes every time** — same fields, same key order, same element order,
+regardless of what order the API returned things in or when you called
+it. It drops `etag`, `updated`, `created`, `iCalUID`, `sequence` and
+friends, all of which change without the event changing.
+
+That's not tidiness. It's what lets you commit the artifact and have
+`git diff --quiet` mean "the calendar didn't change" — which is the
+whole basis of the nightly sync below. Get it wrong and every site
+using this redeploys every night, forever, for nothing.
+
+The same reasoning is why `startOfDay` exists. Passing
+`new Date().toISOString()` as `timeMin` — correct for the browser —
+puts a fresh timestamp in every request, so events near the boundary
+flicker in and out and the artifact churns. Floor it to the start of the
+day, **in the calendar's own time zone**: a job at 01:00 UTC is already
+03:00 in Berlin, and a UTC floor would drop events still happening
+locally today.
+
+### Fetching
+
+Use [the CLI](#nightly-sync-with-github-actions) unless you have a
+reason not to. Directly, it's:
+
+```js
+import { fetchAllEvents, normalizeEvents, serializeArtifact, startOfDay }
+  from '@copperdesign/gcal/node';
+import { writeFile } from 'node:fs/promises';
+
+const events = await fetchAllEvents({
+  calendarId: 'you@example.com',
+  apiKey:     process.env.GCAL_API_KEY,
+  timeMin:    startOfDay('Europe/Berlin'),
+});
+
+await writeFile('src/content/kalender.json', serializeArtifact(normalizeEvents(events)));
+```
+
+### Rendering
+
+The artifact is `{ schemaVersion, events }`. Your build reads it and
+produces markup — the library still ships no opinion about what that
+markup is:
+
+```js
+// scripts/render-calendar.mjs — runs during your build
+import { readFile } from 'node:fs/promises';
+import { renderEventsToString, formatEventDates, escapeHtml, escapeAttr }
+  from '@copperdesign/gcal/node';
+
+const { events } = JSON.parse(await readFile('src/content/kalender.json', 'utf8'));
+const dayKey = (e) => (e.start.dateTime ?? e.start.date).slice(0, 10);
+
+const html = renderEventsToString(events, {
+  empty: '<p class="gcal-state">Keine aktuellen Termine.</p>',
+  wrap:  (rows) => `<div class="gcal">${rows}</div>`,
+
+  // `row` receives (event, index, all) — so neighbour-aware markup like
+  // the continuous-day modifier from the recipe above works here too,
+  // without re-implementing the loop.
+  row: (event, i, all) => {
+    const d = formatEventDates(event, { locale: 'de-DE', timeZone: 'Europe/Berlin' });
+    const continuous = i > 0 && dayKey(all[i - 1]) === dayKey(event);
+    const time = event.allDay ? '' :
+      `<div class="gcal-time">${escapeHtml(d.startTime)} bis ${escapeHtml(d.endTime)} Uhr</div>`;
+    const location = event.location
+      ? `<div class="gcal-location"><b>Ort:</b> <a href="https://maps.google.com/maps?q=${
+          encodeURIComponent(event.location)}">${escapeHtml(event.location)}</a></div>`
+      : '';
+
+    return `<div class="gcal-row${continuous ? ' gcal-continuous-day' : ''}">
+      <div class="gcal-cal"><div class="gcal-day">
+        <div class="gcal-dm">${escapeHtml(d.startMonth)}</div>
+        <div class="gcal-dd">${escapeHtml(d.startDay)}</div>
+        <div class="gcal-dy">${escapeHtml(d.startYear)}</div>
+      </div></div>
+      <div class="gcal-info">
+        ${time}
+        <h3 class="gcal-title">${escapeHtml(event.summary)}</h3>
+        <div class="gcal-description">${event.description}</div>
+        ${location}
+      </div>
+    </div>`;
+  },
+});
+```
+
+Same CSS as the browser recipe — the class contract is identical, so a
+site can move from one path to the other without touching its stylesheet.
+
+**On escaping:** `summary` and `location` are text and must be escaped.
+`description` is deliberately *not* — Google returns real HTML in that
+field, and escaping it would visibly break every event that uses
+formatting. That asymmetry is intentional; treat `description` as
+trusted content from your own calendar, because that's what it is. Use
+`escapeAttr` for anything interpolated into an attribute value.
+
+## Nightly sync with GitHub Actions
+
+The pipeline, end to end:
+
+```
+cron → fetch → normalize → write JSON → commit
+                                          ↓
+                    your existing build → reads JSON → HTML → deploy
+```
+
+Two separate concerns. The sync owns **data**; your existing pipeline
+owns **building and deploying**. They meet at a committed file and
+nowhere else.
+
+If you're coming from a git-backed CMS, this is the same shape you
+already have: a CMS editor doesn't render anything either — it commits
+files, and your build turns them into HTML. Here the committing is done
+by a cron instead of a person. **A CMS is not required and not
+involved.**
+
+### The short version
+
+Add a config file and a workflow. That's it.
+
+`gcal.config.json`:
+
+```json
+{
+  "calendarId": "you@example.com",
+  "timeZone":   "Europe/Berlin",
+  "out":        "src/content/kalender.json"
+}
+```
+
+`maxResults` (page size) and `timeMax` are optional. The API key is
+**not** a config field — it comes from `GCAL_API_KEY`, because this file
+gets committed and a key in it is rejected outright.
+
+```yaml
+# .github/workflows/sync-calendar.yml
+name: Sync calendar
+on:
+  schedule:
+    - cron: '0 1 * * *'    # see "scheduling" below — this time matters
+  workflow_dispatch:
+
+jobs:
+  sync:
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.2.0
+    with:
+      config: gcal.config.json
+    secrets:
+      api-key: ${{ secrets.GCAL_API_KEY }}
+```
+
+Pin the tag, not `@master` — that workflow changes with the CLI it runs.
+Your repo needs `@copperdesign/gcal` as a dependency, a
+`package-lock.json`, and the [server-side API key](#4-a-second-key-for-server-side-use).
+
+Prefer to own it? `npx gcal-sync --config gcal.config.json` is the whole
+job; run it from a workflow of your own.
+
+### Fail-soft: a bad night at Google must not fail your build
+
+By default, a failed fetch **logs, leaves the committed artifact
+untouched, and exits 0**. Yesterday's calendar is a far better outcome
+than a red build or a blank page, and the situation resolves itself
+tomorrow without anyone being paged.
+
+Two cases, distinguished in the log because they need different
+reactions:
+
+- an artifact exists → the site keeps yesterday's calendar, nobody needs
+  to do anything tonight;
+- no artifact exists → your build is about to hit a missing file, and
+  that gets a much louder line.
+
+`--strict` (or `strict: true` on the workflow) opts into a non-zero exit
+instead. **Configuration errors are never soft**: an unknown flag, a
+malformed config, a missing `GCAL_API_KEY`, an unwritable output path —
+all exit 1 with or without `--strict`, because none of them will fix
+themselves by morning. An `apiKey` found *inside* the config file is
+rejected outright rather than warned about; a key in a committed file is
+exactly the mistake this is trying to prevent.
+
+### Scheduling: the part that catches people out
+
+**A push made with `GITHUB_TOKEN` does not trigger other GitHub Actions
+workflows.** That's deliberate on GitHub's part — it's what stops a
+committing workflow from re-triggering itself forever — but it means
+**the sync's commit will not start your deploy workflow.**
+
+- **Deploying from GitHub Actions** (Firebase, rsync, most setups):
+  schedule the sync *ahead of* your deploy job's own cron and let the
+  deploy pick up the committed file. Fifteen minutes is plenty. Expecting
+  the commit to chain leaves your calendar silently never deploying —
+  no error, no red run, just a page that quietly goes stale.
+- **Deploying from a host that watches the repo** (Cloudflare Pages,
+  Netlify, Vercel): those build from a webhook, not from an Actions
+  workflow, so this restriction doesn't apply and the commit should
+  trigger a build directly. GitHub scopes the rule to workflow runs
+  specifically, and Cloudflare documents no bot-commit exclusion — but
+  verify it on your own project before relying on it. If it doesn't
+  fire, add a [Deploy Hook](https://developers.cloudflare.com/pages/configuration/deploy-hooks/)
+  call as a final step in the sync workflow.
+
+> **Do not put `[skip ci]` in the commit message.** It's a natural
+> instinct for a bot commit, and on Cloudflare Pages it is a trap:
+> `[CI Skip]`, `[Skip CI]` and `[CF-Pages-Skip]` all cause Pages to skip
+> the build entirely, so your calendar would commit and never deploy.
+> The default message (`chore: sync calendar`) is safe; if you override
+> `commit-message`, keep it clear of those markers.
+
+### Host notes
+
+Nothing about the sync is host-specific — it writes a file and commits
+it. What differs is what your host does next.
+
+**Firebase Hosting.** Two extra considerations, both real:
+
+1. The scheduling gap above applies, since deploys run in Actions.
+2. **Gate your deploy on whether the payload changed.** Hosting retains
+   every deployed version and each counts in full against the 10 GB
+   storage quota, with no cross-version dedup. An unconditional nightly
+   deploy adds 365 versions a year and will exhaust it. Fingerprint what
+   you'd upload, key an `actions/cache` entry on that hash, and deploy
+   only on a miss — the determinism guarantee above is what makes the
+   fingerprint stable on a quiet night. Take the fingerprint *before* any
+   build step that stamps a date into your output, or it changes every
+   night by construction.
+
+**Cloudflare Pages.** Simpler, as it happens: no scheduling gap (see
+above), and no retention quota of Firebase's kind — the relevant free
+limit is builds per month (500) against roughly 30 for a nightly sync,
+so **no fingerprint gate is needed**. Because the CLI doesn't write when
+nothing changed, a quiet night commits nothing and burns no build at
+all. Set `NODE_VERSION` to 18 or higher in the Pages build environment.
+
+**Anything else** — Netlify, Vercel, plain rsync, a Makefile — follows
+the generic pipeline unchanged. The sync commits a file; whatever you
+already do with committed files still applies.
+
+**Not recommended: a Cloudflare Workers Cron Trigger.** It can fetch on
+a schedule, but it can't commit to git or rebuild static HTML, so you'd
+end up serving from KV at request time — reintroducing exactly the
+runtime dependency this whole approach removes. Keep the cron in GitHub
+Actions regardless of where you host.
+
+### Where to put the artifact
+
+One JSON file, committed. That is the recommended shape, and it is what
+the CLI produces.
+
+You *can* fan it out into per-event content files so a CMS can edit
+them — but think about ownership first. A generated file that an editor
+edits gets overwritten on the next sync, silently, unless you design an
+explicit overlay: a stable key, a separate place for the human-authored
+fields, and a merge step. That's a real feature, not a config flag. Start
+with the single JSON file; split it only when someone actually asks to
+enrich an event.
+
+Do not register the artifact as an editable CMS collection. It is
+machine-owned.
+
 ## Browser support
 
-Modern evergreens. Requires native `fetch`, `Intl.DateTimeFormat`, `<template>`, `URLSearchParams`. No build step required.
+Applies to the browser entry (`@copperdesign/gcal`). Modern evergreens. Requires native `fetch`, `Intl.DateTimeFormat`, `<template>`, `URLSearchParams`. No build step required.
+
+The `/node` entry point requires Node 18 or newer and is tested against 18, 20 and 22.
 
 ## Provenance
 
@@ -417,10 +754,18 @@ gh release create vX.Y.Z --generate-notes
 ```
 
 The `release.yml` GitHub Actions workflow handles the rest: it
-smoke-checks every `src/*.js`, verifies the tag matches `package.json`,
-confirms every `exports` subpath resolves, and publishes to npm with
-provenance. Requires an `NPM_TOKEN` repo secret minted from the
+smoke-checks every `src/*.js` and `bin/*.mjs`, runs the full test suite,
+verifies the tag matches `package.json`, confirms every `exports`
+subpath resolves and actually ships in the tarball, and publishes to npm
+with provenance. Requires an `NPM_TOKEN` repo secret minted from the
 `copperdesign` npm account.
+
+**The tag is load-bearing beyond npm.** Consumers reference the reusable
+sync workflow as
+`copperdesign/gCal/.github/workflows/sync.yml@vX.Y.Z`, which resolves
+against the git tag — so a release that publishes to npm without pushing
+the tag leaves every consuming site's sync job unable to resolve its
+`uses:` line. `git push --follow-tags` before `gh release create`.
 
 ## License
 
