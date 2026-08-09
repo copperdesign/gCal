@@ -117,14 +117,25 @@ jobs:
             exit 0
           fi
 
-          if git diff --quiet -- "$out"; then
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # Stage FIRST, then ask whether anything is staged.
+          #
+          # `git diff --quiet -- "$out"` is the obvious way to write this and is
+          # WRONG: git diff compares the working tree against the index and does
+          # not see untracked files at all. On a consumer's very first sync the
+          # artifact is brand new, so that check reports "unchanged", the job
+          # exits 0, and the file is never committed — every run writes it, every
+          # run discards it, and the calendar never appears. It looks like a
+          # green job doing nothing, forever. `git diff --cached` after `git add`
+          # sees a new file and an edited one alike.
+          git add -- "$out"
+          if git diff --cached --quiet -- "$out"; then
             echo "Calendar unchanged — nothing to commit, no build triggered."
             exit 0
           fi
 
-          git config user.name  'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- "$out"
           git commit -m "$COMMIT_MESSAGE"
           git push
           echo "Committed $out."

@@ -1,4 +1,4 @@
-/*! gCal — v0.2.0 - 2026-08-09
+/*! gCal — v0.2.1 - 2026-08-09
  * https://copperdesign.github.io/
  *
  * Copyright (c) 2026 Christian Fillies;
