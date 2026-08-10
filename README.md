@@ -961,63 +961,23 @@ Like Google's own push, the trigger reports *that* the calendar changed,
 not what changed. That suits us exactly — the sync refetches wholesale
 anyway.
 
-**1. The script.** A new project at [script.google.com](https://script.google.com):
+The shape of it: a trigger bound to the calendar posts a
+`repository_dispatch` to GitHub, which starts your sync workflow. The
+credentials live in Script Properties — a fine-grained PAT scoped to the
+one repository with **Contents: read and write**, which is exactly what
+`POST /repos/{owner}/{repo}/dispatches` requires and nothing more.
 
-```js
-/** Ping GitHub so the sync workflow runs now instead of tonight. */
-function notifyGitHub() {
-  const props = PropertiesService.getScriptProperties();
-  const repo  = props.getProperty('GITHUB_REPO');   // "owner/name"
-  const token = props.getProperty('GITHUB_TOKEN');
+> **📖 Step-by-step setup: [`docs/instant-updates.md`](docs/instant-updates.md)**
+>
+> The token, the Apps Script project, the trigger, the test — about fifteen
+> minutes, once. Full script, and a troubleshooting table for the handful of
+> ways it goes wrong (a `404` means the token can't see the repo; a dispatch
+> with no workflow run means the trigger isn't on your default branch yet).
 
-  const res = UrlFetchApp.fetch(`https://api.github.com/repos/${repo}/dispatches`, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-    payload: JSON.stringify({ event_type: 'calendar-changed' }),
-    muteHttpExceptions: true,
-  });
+The rest of this section is what that walkthrough assumes you've already
+decided — worth reading first if you haven't.
 
-  // 204 No Content is success. Throwing on anything else is deliberate:
-  // a silent failure here looks exactly like "nobody edited the
-  // calendar", and you would never notice it.
-  const code = res.getResponseCode();
-  if (code !== 204) {
-    throw new Error(`GitHub dispatch failed: ${code} ${res.getContentText()}`);
-  }
-}
-
-/** Run once, by hand, to install the trigger. Safe to re-run. */
-function installTrigger() {
-  const calendarId = 'you@example.com';
-
-  // Clear our own triggers first — otherwise every run of this function
-  // stacks another one and the calendar dispatches N times per edit.
-  ScriptApp.getProjectTriggers()
-    .filter((t) => t.getHandlerFunction() === 'notifyGitHub')
-    .forEach((t) => ScriptApp.deleteTrigger(t));
-
-  ScriptApp.newTrigger('notifyGitHub')
-    .forUserCalendar(calendarId)
-    .onEventUpdated()
-    .create();
-}
-```
-
-**2. The credentials.** Project Settings → Script Properties, two entries:
-`GITHUB_REPO` (`owner/name`) and `GITHUB_TOKEN`. The token is a
-fine-grained PAT scoped to **that one repository**, with the
-**Contents: read and write** permission — that's what
-`POST /repos/{owner}/{repo}/dispatches` requires. Nothing else.
-
-**3. Install.** Run `installTrigger` once from the editor and approve the
-scopes (calendar read, script trigger management, external requests).
-
-**4. The workflow.** Add `repository_dispatch` to the wrapper from
+**The workflow side.** Add `repository_dispatch` to the wrapper from
 [the short version](#the-short-version), and keep the cron as a
 safety net:
 
