@@ -140,6 +140,25 @@
       ]);
       const count = document.querySelectorAll('#events article').length;
       check('renderItems produced 2 articles', count === 2, `got ${count}`);
+      // Provenance: the marker that tells you, from the HTML alone, that
+      // these events came from a browser fetch rather than a build.
+      check('target marked data-gcal-render="client"',
+            document.querySelector('#events').dataset.gcalRender === 'client',
+            document.querySelector('#events').dataset.gcalRender);
+    }
+
+    // 6b. The marker is removed on unmount — a stale one would claim gCal
+    // rendered content that is no longer in the element.
+    {
+      const target = document.createElement('div');
+      document.body.appendChild(target);
+      const cal = new GCal({ target, template: '#gcal-row', calendarId: 'x', apiKey: 'y' });
+      cal.renderItems([{ summary: 'X', start: { date: '2026-07-01' }, end: { date: '2026-07-02' } }]);
+      check('marker set by renderItems', target.dataset.gcalRender === 'client');
+      cal.unmount();
+      check('marker gone after unmount', target.dataset.gcalRender === undefined,
+            String(target.dataset.gcalRender));
+      target.remove();
     }
 
     // 7. GCal.renderItems with empty + empty template

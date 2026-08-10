@@ -109,6 +109,17 @@ export class GCal {
   async render() {
     this._cleanup();
 
+    // Mark the target so `view-source` and the element inspector both say
+    // plainly where this HTML came from. The build-time path stamps the
+    // equivalent with `provenanceComment()` from `/node`, and the two use
+    // the same vocabulary on purpose: `client` here, a trigger name there.
+    //
+    // Set before any early return, so it is present on the consent CTA and
+    // the error state too — "this element is gCal's, and gCal ran in the
+    // browser" is true in every one of those cases, and those are exactly
+    // the states someone inspects when a page looks wrong.
+    this.target.dataset.gcalRender = 'client';
+
     if (this.consent && !this.consent.check()) {
       if (!this.consent.ctaTemplate) {
         throw new Error('gCal: consent.ctaTemplate is required when consent.check is provided');
@@ -152,6 +163,12 @@ export class GCal {
    * test fixtures.
    */
   renderItems(items) {
+    // Also marked here, not just in `render()`. This method is public and
+    // documented as the imperative entry point, so a consumer feeding it
+    // their own items never goes through `render()` at all — and that path
+    // produces exactly the same client-rendered DOM, so it should say so.
+    this.target.dataset.gcalRender = 'client';
+
     if (!items || items.length === 0) {
       if (this.emptyTemplate) {
         this.target.replaceChildren(this.emptyTemplate.content.cloneNode(true));
@@ -189,6 +206,11 @@ export class GCal {
       document.removeEventListener(this._consentEvent, this._onConsent);
     }
     this.target.replaceChildren();
+    // Leave the element as we found it. A stale `data-gcal-render` on an
+    // emptied container would claim gCal rendered something that is no
+    // longer there — worse than no marker, since the marker exists to be
+    // trusted when someone is working out why a page looks wrong.
+    delete this.target.dataset.gcalRender;
   }
 
   // ── internals ──────────────────────────────────────────────────────

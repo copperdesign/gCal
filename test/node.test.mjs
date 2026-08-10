@@ -28,6 +28,8 @@ import {
   formatEventDates,
   inclusiveEndDate,
   plainText,
+  detectBuildTrigger,
+  provenanceComment,
   SCHEMA_VERSION,
 } from '../src/node.js';
 
@@ -448,6 +450,59 @@ test('plainText handles empty and missing input', () => {
   assert.equal(plainText(''), '');
   assert.equal(plainText(), '');
   assert.equal(plainText('   \n  '), '');
+});
+
+/* ── provenance ──────────────────────────────────────────────────────── */
+
+test('detectBuildTrigger names the three ways a calendar reaches a page', () => {
+  assert.equal(detectBuildTrigger({ GITHUB_EVENT_NAME: 'repository_dispatch' }), 'calendar-trigger');
+  assert.equal(detectBuildTrigger({ GITHUB_EVENT_NAME: 'schedule' }), 'nightly-cron');
+  assert.equal(detectBuildTrigger({ GITHUB_EVENT_NAME: 'workflow_dispatch' }), 'manual');
+  assert.equal(detectBuildTrigger({ GITHUB_EVENT_NAME: 'push' }), 'push');
+});
+
+test('detectBuildTrigger distinguishes an unknown CI from a laptop', () => {
+  assert.equal(detectBuildTrigger({}), 'local');
+  assert.equal(detectBuildTrigger({ CI: 'true' }), 'ci');
+  assert.equal(detectBuildTrigger({ GITHUB_EVENT_NAME: 'issues', CI: 'true' }), 'ci');
+});
+
+test('provenanceComment is a well-formed HTML comment', () => {
+  assert.equal(
+    provenanceComment({ trigger: 'nightly-cron' }),
+    '<!-- gcal · server-rendered · nightly-cron -->',
+  );
+});
+
+test('provenanceComment includes a timestamp only when asked', () => {
+  // Opt-in: a timestamp makes every build differ from the last, which is
+  // unhelpful for anyone diffing their built output.
+  assert.ok(!provenanceComment({ trigger: 'ci' }).match(/\d{4}-\d{2}-\d{2}/));
+  assert.match(
+    provenanceComment({ trigger: 'ci', at: '2026-08-10T09:00:00Z' }),
+    /2026-08-10T09:00:00Z/,
+  );
+});
+
+test('provenanceComment cannot be made to terminate early', () => {
+  // `--` inside a comment ends it in some parsers and is invalid in all of
+  // them. A caller-supplied trigger carrying one would eat the rest of the
+  // document from that point on.
+  const out = provenanceComment({ trigger: 'evil--> <script>alert(1)</script> <!--' });
+  const inner = out.slice('<!--'.length, -'-->'.length);
+  assert.ok(!inner.includes('--'), `comment body must not contain "--": ${out}`);
+  assert.equal(out.indexOf('-->'), out.length - 3, 'exactly one terminator, at the end');
+});
+
+test('provenance never reaches the artifact', () => {
+  // The determinism contract. A trigger name or timestamp in the JSON would
+  // make a cron run and a dispatch run differ over an identical calendar,
+  // and the deploy gate would fire on every alternation.
+  const json = serializeArtifact(normalizeEvents(fixture));
+  for (const leak of ['nightly-cron', 'calendar-trigger', 'server-rendered', 'gcal ·']) {
+    assert.ok(!json.includes(leak), `artifact must not contain "${leak}"`);
+  }
+  assert.deepEqual(Object.keys(JSON.parse(json)), ['schemaVersion', 'events']);
 });
 
 /* ── pagination ──────────────────────────────────────────────────────── */

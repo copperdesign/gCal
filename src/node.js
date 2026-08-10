@@ -280,6 +280,67 @@ export function escapeAttr(value = '') {
   return escapeHtml(value).replace(/"/g, '&quot;');
 }
 
+/* ── provenance ──────────────────────────────────────────────────────────
+   Answering "what produced this HTML?" from the HTML itself. Three things
+   can put a calendar on a page — a browser fetch, a build fired by a
+   calendar edit, or a build fired by the nightly cron — and from the
+   outside they are indistinguishable, which makes "is this stale, and if
+   so which half is broken?" much harder to answer than it should be.
+
+   NOT IN THE ARTIFACT, and this is the whole design constraint. Putting a
+   trigger name or a timestamp into the JSON would make a cron run and a
+   dispatch run differ byte-for-byte over an identical calendar, the deploy
+   gate would fire on every alternation, and the determinism contract that
+   the entire sync rests on would be gone. Provenance describes the RENDER,
+   so it lives in the rendered output and nowhere else.
+
+   No version number either, deliberately. The only version string in `src/`
+   is the banner, kept in step by `scripts/stamp-banners.mjs` and asserted
+   by CI. A second one here would be a second thing to keep in sync and
+   would go stale silently — the same reason `bin/gcal-sync.mjs` carries no
+   banner. */
+
+/**
+ * Which CI event produced this build.
+ *
+ * Reads `GITHUB_EVENT_NAME`, which Actions sets on every run. That is a
+ * deliberate coupling and a small one: this package already ships a
+ * reusable Actions workflow and a CLI aimed at it, and `trigger` is an
+ * argument on `provenanceComment` for anyone building elsewhere.
+ */
+export function detectBuildTrigger(env = process.env) {
+  switch (env.GITHUB_EVENT_NAME) {
+    // The calendar told us. See docs/instant-updates.md.
+    case 'repository_dispatch': return 'calendar-trigger';
+    // The safety net ran. Also the only thing that expires past events.
+    case 'schedule':            return 'nightly-cron';
+    case 'workflow_dispatch':   return 'manual';
+    case 'push':                return 'push';
+    default:                    return env.CI ? 'ci' : 'local';
+  }
+}
+
+/**
+ * An HTML comment naming what produced the markup. Place it wherever you
+ * want it visible — the library doesn't inject it, same as it ships no
+ * other markup of its own.
+ *
+ *   provenanceComment()                    // <!-- gcal · server-rendered · nightly-cron -->
+ *   provenanceComment({ trigger: 'cms' })  // <!-- gcal · server-rendered · cms -->
+ *
+ * `at` is opt-in rather than automatic: a timestamp in the output makes
+ * every build differ from the last, which is fine if you already stamp a
+ * build date into your pages and actively unhelpful if you diff them.
+ */
+export function provenanceComment({ trigger = detectBuildTrigger(), at } = {}) {
+  const parts = ['gcal', 'server-rendered', trigger];
+  if (at) parts.push(at);
+  // `--` cannot appear inside an HTML comment; a caller-supplied trigger
+  // containing one would produce markup that terminates early and eats the
+  // rest of the document.
+  return `<!-- ${parts.join(' · ').replace(/--+/g, '-')} -->`;
+}
+
 // One day in ms. See `inclusiveEndDate` for why UTC parsing makes this safe.
 const DAY_MS = 86_400_000;
 

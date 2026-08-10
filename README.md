@@ -472,11 +472,72 @@ import {
   formatEventDates,     // same formatter the browser path uses
   inclusiveEndDate,     // → the last date an event actually covers
   plainText,            // → HTML description flattened to text
+  provenanceComment,    // → an HTML comment naming what built this
+  detectBuildTrigger,   // → 'calendar-trigger' | 'nightly-cron' | …
 } from '@copperdesign/gcal/node';
 ```
 
 Nothing DOM-bound is reachable from this entry point, so it imports
 cleanly in plain Node 18+ with no shim.
+
+### Provenance: telling from the HTML what produced it
+
+Three things can put a calendar on a page — a browser fetch, a build fired
+by a calendar edit, or a build fired by the nightly cron — and from the
+outside they look identical. That makes "this page looks stale, which half
+is broken?" much harder to answer than it should be, so both paths leave a
+marker.
+
+**Browser path.** `GCal` sets `data-gcal-render="client"` on your target
+element, before the first paint and on every path — including the consent
+CTA and the error state, which are exactly the states you inspect when
+something looks wrong. `unmount()` removes it again.
+
+```html
+<div id="events" data-gcal-render="client">…</div>
+```
+
+**Build-time path.** `provenanceComment()` returns a comment you place
+wherever you want it. The library doesn't inject it — same position it
+takes on all markup.
+
+```js
+import { provenanceComment, renderEventsToString } from '@copperdesign/gcal/node';
+
+const html = provenanceComment() + renderEventsToString(events, { row });
+// <!-- gcal · server-rendered · nightly-cron -->
+```
+
+The trigger comes from `GITHUB_EVENT_NAME`, which Actions sets on every
+run, so the comment distinguishes the two build paths without any wiring
+on your side:
+
+| CI event | Reported as |
+|---|---|
+| `repository_dispatch` | `calendar-trigger` |
+| `schedule` | `nightly-cron` |
+| `workflow_dispatch` | `manual` |
+| `push` | `push` |
+| *anything else, in CI* | `ci` |
+| *no CI at all* | `local` |
+
+Pass `{ trigger }` to override it if you build somewhere other than
+Actions, and `{ at }` for a timestamp — opt-in, because a timestamp makes
+every build differ from the last, which is unhelpful if you diff your
+built output.
+
+> **None of this goes in the artifact**, and that's the constraint the
+> design is shaped by. A trigger name or timestamp in the JSON would make
+> a cron run and a dispatch run differ byte-for-byte over an identical
+> calendar, the deploy gate would fire on every alternation, and the
+> [determinism contract](#determinism-and-why-you-should-care) the whole
+> sync rests on would be gone. Provenance describes the *render*, so it
+> lives in rendered output and nowhere else.
+
+There's no version number in the marker on purpose. The only version
+string in `src/` is the banner, kept in step by `scripts/stamp-banners.mjs`
+and asserted by CI; a second one would be a second thing to keep in sync,
+and it would go stale quietly.
 
 ### Determinism, and why you should care
 
