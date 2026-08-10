@@ -978,8 +978,8 @@ The rest of this section is what that walkthrough assumes you've already
 decided — worth reading first if you haven't.
 
 **The workflow side.** Add `repository_dispatch` to the wrapper from
-[the short version](#the-short-version), and keep the cron as a
-safety net:
+[the short version](#the-short-version). **Keep the cron** — it is not
+made redundant by the trigger, for the reason below:
 
 ```yaml
 # .github/workflows/sync-calendar.yml
@@ -988,7 +988,7 @@ on:
   repository_dispatch:
     types: [calendar-changed]   # matches event_type in the script
   schedule:
-    - cron: '0 1 * * *'         # backstop, ~30 runs/month
+    - cron: '0 1 * * *'         # NOT optional — see below. ~30 runs/month
   workflow_dispatch:            # manual re-run
 
 jobs:
@@ -1000,12 +1000,30 @@ jobs:
       api-key: ${{ secrets.GCAL_API_KEY }}
 ```
 
-Push for speed, cron for guaranteed convergence: if a trigger is ever
-missed or Apps Script disables it, the calendar is still correct within a
-day rather than silently never. That combination lands comfortably under
-100 minutes a month. The reusable workflow's concurrency group already
-serialises a dispatch that lands mid-cron, so the two triggers can't race
-each other.
+#### The cron is not a fallback — keep it either way
+
+The natural reading is "the trigger replaced the cron, and the cron is
+now just insurance". That's wrong, and the second reason below is
+structural rather than defensive.
+
+**1. Past events expire by the passage of time, not by an edit.** The CLI
+floors `timeMin` to the start of today, so an event that has happened
+drops out of the fetch window *on its own* — the artifact changes with no
+calendar edit whatsoever. But the trigger only ever fires on edits.
+Without the cron, a concert that happened last week sits on the page
+until the next time somebody happens to touch the calendar, which on a
+stable calendar could be months. **Nothing else expires past events.**
+
+**2. Both moving parts fail silently.** Apps Script disables triggers
+that error repeatedly, mailing only the *script's owner* — which may not
+be you. Fine-grained PATs expire within a year. In both cases dispatches
+simply stop, the site reverts to being up to a day stale, and nothing
+goes red. The failure mode is "it quietly got slower again", which nobody
+notices for weeks.
+
+So: trigger for speed, cron for correctness. The pair lands comfortably
+under 100 minutes a month, and the reusable workflow's concurrency group
+already serialises a dispatch that lands mid-cron, so they can't race.
 
 #### The bonus: the chaining problem disappears
 

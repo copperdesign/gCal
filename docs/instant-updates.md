@@ -23,7 +23,7 @@ Apps Script onEventUpdated trigger  (Google, ~1 min)
         ▼
 your sync workflow ──▶ gcal-sync ──▶ changed? ──▶ build ──▶ deploy
         ▲
-        └── nightly cron — the safety net, not the mechanism
+        └── nightly cron — still required, see "Keeping it alive"
 ```
 
 Without it, the site is only as fresh as the cron: an event added at 09:00
@@ -246,7 +246,7 @@ on:
   repository_dispatch:
     types: [calendar-changed]   # must match EVENT_TYPE in the script
   schedule:
-    - cron: '0 1 * * *'         # safety net — see "Keeping it alive"
+    - cron: '0 1 * * *'         # NOT optional — see "Keeping it alive"
   workflow_dispatch:            # manual re-run
 
 jobs:
@@ -303,18 +303,33 @@ not the credentials. Check the **Triggers** panel and the **Executions** log.
 
 ## Keeping it alive
 
-Both moving parts fail silently, and neither announces itself:
+### Do not remove the nightly cron
+
+Having set the trigger up, deleting the cron feels like the obvious tidy-up.
+Don't. There are two reasons to keep it, and the first isn't a safety
+argument at all.
+
+**1. Past events expire by time passing, not by an edit.** `gcal-sync` floors
+`timeMin` to the start of today, so an event that has already happened falls
+out of the fetch window on its own — the artifact changes with no calendar
+edit at all. The trigger only fires on *edits*. Delete the cron and last
+week's concert stays on the page until somebody next happens to touch the
+calendar, which on a stable calendar can be months. Nothing else expires past
+events.
+
+**2. Both moving parts fail silently.** Neither announces itself:
 
 - **Apps Script disables triggers that error repeatedly**, mailing only the
   script's *owner*. If that's a client's account, you will never see it.
 - **Fine-grained PATs expire** — a year at most.
 
 In both cases dispatches simply stop. The site reverts to being up to a day
-stale, nothing goes red, and the failure mode is "it quietly got slower again".
+stale, nothing goes red, and the failure mode is "it quietly got slower
+again".
 
-**This is why the cron stays.** Push for speed, cron for guaranteed
-convergence: even with the trigger dead, the calendar is correct within 24
-hours rather than silently never. Don't remove it because the trigger works.
+Trigger for speed, cron for correctness. They do different jobs.
+
+### Routine upkeep
 
 Worth doing:
 
