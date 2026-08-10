@@ -1,6 +1,6 @@
 {
   "name": "@copperdesign/gcal",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Render a Google Calendar into HTML you control — in the browser or at build time. Template-driven, locale-aware, consent-friendly.",
   "type": "module",
   "scripts": {
