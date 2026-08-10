@@ -849,7 +849,7 @@ on:
 
 jobs:
   sync:
-    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.3.0
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.0
     with:
       config: gcal.config.json
     secrets:
@@ -877,13 +877,15 @@ knows, so your pipeline can decide for itself:
 
 | Output | Value |
 |---|---|
-| `changed` | `'true'` when the artifact changed and was committed, `'false'` otherwise |
+| `changed` | `'true'` when the artifact changed — and was committed, unless you set `commit: false`. `'false'` otherwise |
 | `events` | Number of events in the artifact; empty when no artifact exists |
+| `out` | Path the artifact was written to, read from your config |
+| `artifact` | Name of the uploaded run artifact — set only under `commit: false`, and only when something changed |
 
 ```yaml
 jobs:
   sync:
-    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.3.0
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.0
     with:     { config: gcal.config.json }
     secrets:  { api-key: ${{ secrets.GCAL_API_KEY }} }
 
@@ -904,6 +906,81 @@ bytes that didn't move.
 `changed` is `'true'` only after the push succeeds. If the push fails the
 job fails, and a deploy gated on the output correctly doesn't run — the
 branch doesn't have the artifact, so there is nothing to deploy yet.
+
+### Owning the commit: deploy first, commit after
+
+The default order is commit, then deploy. Both orders can fail. Only one
+of them heals.
+
+- **Commit first, deploy second** — the push lands, the deploy breaks.
+  Git now records the new calendar, so *tomorrow's* run finds no diff,
+  reports `changed: 'false'`, and never retries. The live site is stale
+  and stays stale, with one red run days ago as the only signal and every
+  run since green.
+- **Deploy first, commit second** — the deploy lands, the commit breaks.
+  The site is current, git is briefly behind, and tomorrow's run sees the
+  same diff, redeploys, and pushes. **It fixes itself.**
+
+`commit: false` buys the second order. The job fetches, writes, and
+reports `changed` — on the diff alone now, since there's no push left to
+wait on — then stops short of committing and uploads the artifact to the
+run instead. Your next job gets a fresh runner and an empty workspace, so
+the file has to travel somehow. You download it, deploy it, and make the
+commit yourself, once the thing is actually live:
+
+```yaml
+jobs:
+  sync:
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.0
+    with:
+      config: gcal.config.json
+      commit: false
+    secrets:
+      api-key: ${{ secrets.GCAL_API_KEY }}
+
+  deploy:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write            # the commit is yours now, so is the token
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.sync.outputs.artifact }}
+          path: src/content      # the artifact's DIRECTORY — see below
+
+      # …your build and deploy, whatever the host
+
+      - name: Commit the calendar now that it's live
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- '${{ needs.sync.outputs.out }}'
+          git commit -m 'chore: sync calendar'
+          git push
+```
+
+> **`path:` wants the artifact's directory, not its path.**
+> `upload-artifact` roots a single-file artifact at that file's own
+> folder, so the archive holds `kalender.json`, not
+> `src/content/kalender.json`. Point `path:` at `src/content` and it
+> lands where your build looks for it. Point it at `.` and it lands at
+> the repo root, where nothing reads it — and the build quietly uses the
+> older committed copy instead, which looks exactly like success.
+
+On a `repository_dispatch` run, check out the branch explicitly as
+described [below](#instant-updates-let-the-calendar-trigger-the-sync) —
+a detached `HEAD` has nowhere to push that commit to.
+
+**Use the default unless your deploy is a job in your own workflow.** If
+your host builds from a webhook (Cloudflare Pages, Netlify, Vercel), the
+commit *is* the deploy trigger; `commit: false` would leave the site
+waiting for a push that never comes. This trade only exists for
+pipelines that deploy from Actions, where you can put the two steps in
+either order.
 
 ### Fail-soft: a bad night at Google must not fail your build
 
@@ -1054,7 +1131,7 @@ on:
 
 jobs:
   sync:
-    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.3.0
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.0
     with:
       config: gcal.config.json
     secrets:

@@ -21,6 +21,31 @@
 # it useless to everyone else — the consumer's existing pipeline picks
 # the committed file up on its own terms.
 #
+# WHO OWNS THE COMMIT (`commit: false`)
+# By default this job commits and pushes, which forces one ordering on
+# the caller: the artifact lands in git first, and a deploy gated on
+# `changed` runs after it. For a consumer that deploys from Actions that
+# ordering is not cosmetic, because the two failure modes are not
+# symmetric.
+#
+#   · Commit first, deploy second — push succeeds, deploy fails. Git now
+#     records the new calendar, so tomorrow's run finds no diff, reports
+#     changed=false, and never retries the deploy. The live site stays
+#     stale until a human notices. One red run is the only signal ever
+#     given, and every run after it is green.
+#
+#   · Deploy first, commit second — deploy succeeds, commit fails. The
+#     site is current and git is briefly behind, so tomorrow's run sees
+#     the same diff, redeploys, and pushes. It self-heals.
+#
+# `commit: false` buys the second ordering. The job fetches, writes and
+# reports `changed` as usual, then stops: the file is left uncommitted
+# and uploaded as a run artifact, because the caller's next job gets a
+# fresh runner and an empty workspace, so the file has to travel somehow.
+# The caller downloads it, deploys, and makes the commit itself. That
+# keeps the deploy out of here (see above) while letting the consumer
+# pick which failure it would rather have.
+#
 # THE ONE NON-OBVIOUS THING (read this before scheduling it)
 # A push made with GITHUB_TOKEN does NOT trigger other GitHub Actions
 # workflows. That is deliberate on GitHub's part — it is what stops a
@@ -67,6 +92,10 @@ on:
         description: 'Fail the job when the fetch fails, instead of keeping the existing artifact'
         type: boolean
         default: false
+      commit:
+        description: 'Commit and push the artifact when it changed. false leaves it uncommitted and uploads it for the caller instead — see the header'
+        type: boolean
+        default: true
     secrets:
       api-key:
         description: 'Server-side Google API key, restricted to the Calendar API'
@@ -77,19 +106,30 @@ on:
     # value mapped here, not the one on the job.
     outputs:
       changed:
-        description: "'true' when the artifact changed and was committed, 'false' otherwise. Gate a deploy job on this."
+        description: "'true' when the artifact changed — and was committed, unless commit is false. 'false' otherwise. Gate a deploy job on this."
         value: ${{ jobs.sync.outputs.changed }}
       events:
         description: 'Number of events in the artifact, or empty when no artifact exists.'
         value: ${{ jobs.sync.outputs.events }}
+      out:
+        description: 'Path the artifact was written to, read from the config. The caller needs it to stage its own commit.'
+        value: ${{ jobs.sync.outputs.out }}
+      artifact:
+        description: "Name of the uploaded run artifact — set only when commit is false and something changed, empty otherwise. Feed it to download-artifact."
+        value: ${{ jobs.sync.outputs.artifact }}
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     outputs:
-      changed: ${{ steps.commit.outputs.changed }}
-      events:  ${{ steps.commit.outputs.events }}
+      changed:  ${{ steps.commit.outputs.changed }}
+      events:   ${{ steps.commit.outputs.events }}
+      out:      ${{ steps.commit.outputs.out }}
+      artifact: ${{ steps.commit.outputs.artifact }}
     # Needed to push the commit. The repo default token is read-only.
+    # `permissions` takes no expressions, so this is granted even under
+    # commit: false, where nothing here pushes — the caller's own commit
+    # job is the one that needs it then.
     permissions:
       contents: write
     concurrency:
@@ -117,13 +157,19 @@ jobs:
       # Read the output path from the config rather than adding
       # everything: `git add -A` in a job with write permission would
       # happily sweep up anything else the runner touched.
-      - name: Commit if the calendar changed
+      - name: Detect the change, and commit it unless the caller said not to
         id: commit
         env:
           COMMIT_MESSAGE: ${{ inputs.commit-message }}
+          COMMIT: ${{ inputs.commit }}
         run: |
           set -euo pipefail
           out=$(node -p "JSON.parse(require('fs').readFileSync('${{ inputs.config }}','utf8')).out")
+          # Published unconditionally, including on the paths that write
+          # nothing: a caller making its own commit needs the path to
+          # stage, and asking it to re-read the config would be a second
+          # copy of this line in someone else's repo.
+          echo "out=$out" >> "$GITHUB_OUTPUT"
 
           if [ ! -f "$out" ]; then
             # The sync exited 0 without writing — a failed fetch with no
@@ -143,9 +189,6 @@ jobs:
           # file shape is the versioned contract.
           echo "events=$(node -p "JSON.parse(require('fs').readFileSync('$out','utf8')).events.length")" >> "$GITHUB_OUTPUT"
 
-          git config user.name  'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
           # Stage FIRST, then ask whether anything is staged.
           #
           # `git diff --quiet -- "$out"` is the obvious way to write this and is
@@ -156,6 +199,10 @@ jobs:
           # run discards it, and the calendar never appears. It looks like a
           # green job doing nothing, forever. `git diff --cached` after `git add`
           # sees a new file and an edited one alike.
+          #
+          # This runs under commit: false too — staging is how the change is
+          # DETECTED, not merely how it is committed, and an index nobody
+          # commits dies with the runner.
           git add -- "$out"
           if git diff --cached --quiet -- "$out"; then
             echo "Calendar unchanged — nothing to commit, no build triggered."
@@ -163,7 +210,44 @@ jobs:
             exit 0
           fi
 
-          git commit -m "$COMMIT_MESSAGE"
-          git push
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-          echo "Committed $out."
+          if [ "$COMMIT" = 'true' ]; then
+            git config user.name  'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m "$COMMIT_MESSAGE"
+            # `changed` is written AFTER the push, not before: a caller
+            # gating a deploy on it must not be told the artifact is on the
+            # branch while the push is still in doubt.
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Committed $out."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            # The name is decided here rather than in the upload step so
+            # there is one source of truth: that step uploads exactly when
+            # this is non-empty, so the two cannot drift into publishing
+            # under a name the caller was never handed.
+            echo "artifact=gcal-$(basename "$out")" >> "$GITHUB_OUTPUT"
+            echo "Calendar changed — left uncommitted (commit: false); handing it to the caller."
+          fi
+
+      # A caller's next job gets a fresh runner and an empty workspace, so
+      # under commit: false the file has to travel through the run's
+      # artifact store or not at all. Only when it actually changed: on a
+      # quiet night the caller's deploy is skipped anyway, and an upload
+      # nobody downloads is pure storage.
+      #
+      # NOTE for the caller: upload-artifact roots a single-file artifact at
+      # that file's own directory, so the archive holds `kalender.json`, not
+      # `src/content/kalender.json`. download-artifact therefore needs
+      # `path:` set to the artifact's directory, or the file lands at the
+      # repo root and the build quietly uses the older committed copy.
+      - name: Hand the artifact to the caller
+        if: steps.commit.outputs.artifact != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.commit.outputs.artifact }}
+          path: ${{ steps.commit.outputs.out }}
+          if-no-files-found: error
+          # A handoff inside one run. The default 90 days would keep a
+          # year's worth of nightly calendars nobody will ever open.
+          retention-days: 1
