@@ -2,7 +2,9 @@
 #
 #   jobs:
 #     sync:
-#       uses: copperdesign/gCal/.github/workflows/sync.yml@v0.3.0
+#       uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.1
+#       permissions:
+#         contents: write        # see PERMISSIONS below — not optional
 #       with:
 #         config: gcal.config.json
 #       secrets:
@@ -45,6 +47,28 @@
 # The caller downloads it, deploys, and makes the commit itself. That
 # keeps the deploy out of here (see above) while letting the consumer
 # pick which failure it would rather have.
+#
+# PERMISSIONS ARE THE CALLER'S TO GRANT (this one bites before step 1)
+# This workflow declares no `permissions:` of its own, deliberately. A
+# called workflow inherits the token of the job that called it and cannot
+# ask for more than that job holds, so a `permissions: contents: write`
+# in here is not a request — it is a ceiling check, and it fails the
+# entire run as a `startup_failure`, before a single step executes, for
+# any caller whose repository defaults the workflow token to read. That
+# has been the default for every repository created since February 2023,
+# so "it never even started" was the out-of-the-box experience until
+# 0.5.1. The grant belongs on the calling job:
+#
+#     sync:
+#       uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.1
+#       permissions:
+#         contents: write
+#
+# Under `commit: false` nothing here pushes, so grant nothing at all — a
+# job that fetches from the open internet has no business holding a write
+# token. That asymmetry is the second reason this isn't declared here:
+# `permissions` takes no expressions, so any fixed block would force half
+# the callers to over-grant.
 #
 # THE ONE NON-OBVIOUS THING (read this before scheduling it)
 # A push made with GITHUB_TOKEN does NOT trigger other GitHub Actions
@@ -126,12 +150,9 @@ jobs:
       events:   ${{ steps.commit.outputs.events }}
       out:      ${{ steps.commit.outputs.out }}
       artifact: ${{ steps.commit.outputs.artifact }}
-    # Needed to push the commit. The repo default token is read-only.
-    # `permissions` takes no expressions, so this is granted even under
-    # commit: false, where nothing here pushes — the caller's own commit
-    # job is the one that needs it then.
-    permissions:
-      contents: write
+    # No `permissions:` here on purpose — the calling job grants the write
+    # this needs to push. Declaring it here fails the run at startup for
+    # any caller whose default token is read. See PERMISSIONS in the header.
     concurrency:
       group: gcal-sync-${{ github.repository }}-${{ github.ref }}
       cancel-in-progress: false

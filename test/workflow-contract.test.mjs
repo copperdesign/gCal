@@ -1,7 +1,9 @@
 /**
  * @docs ../README.md#outputs-gating-your-own-deploy
  *
- * The output wiring of .github/workflows/sync.yml, checked statically.
+ * The caller-facing contract of .github/workflows/sync.yml, checked
+ * statically: the output wiring, and the one line that decides whether the
+ * workflow can be called at all.
  *
  * WHY THIS EXISTS
  * A reusable workflow declares each output TWICE — once on `workflow_call`,
@@ -79,6 +81,28 @@ test('the upload is gated on the same output that names it', () => {
   assert.match(yml, /if: steps\.commit\.outputs\.artifact != ''/);
   assert.match(yml, /name: \$\{\{ steps\.commit\.outputs\.artifact \}\}/);
   assert.match(yml, /path: \$\{\{ steps\.commit\.outputs\.out \}\}/);
+});
+
+test('the workflow declares no permissions of its own', () => {
+  // Not a style rule — this is the bug that made the workflow uncallable
+  // from 0.2.0 to 0.5.0, and nothing about it is visible from in here.
+  //
+  // A called workflow inherits the token of the job that called it and
+  // cannot ask for more. `permissions: contents: write` in this file is
+  // therefore a ceiling check, not a request, and it fails the caller's
+  // whole run as a startup_failure — no job, no step, no log — for every
+  // repository whose default workflow token is read. That has been the
+  // default since February 2023, so it was the out-of-the-box experience
+  // for everyone. The grant belongs on the calling job; the README says so.
+  //
+  // `permissions` takes no expressions either, so a fixed block would also
+  // force `commit: false` callers to hand a write token to a job that only
+  // fetches. Two reasons, one rule: don't put it back.
+  assert.doesNotMatch(
+    yml,
+    /^\s*permissions:/m,
+    'sync.yml must not declare permissions — it makes the workflow uncallable from a read-token repo',
+  );
 });
 
 test('commit defaults to true — adopting the input must not change behaviour', () => {

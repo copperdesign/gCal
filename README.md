@@ -849,7 +849,9 @@ on:
 
 jobs:
   sync:
-    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.0
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.1
+    permissions:
+      contents: write        # the sync job pushes the commit — see below
     with:
       config: gcal.config.json
     secrets:
@@ -859,6 +861,20 @@ jobs:
 Pin the tag, not `@master` — that workflow changes with the CLI it runs.
 Your repo needs `@copperdesign/gcal` as a dependency, a
 `package-lock.json`, and the [server-side API key](#4-a-second-key-for-server-side-use).
+
+> **`permissions` on the calling job is not optional.** A called workflow
+> inherits the token of the job that called it and can't ask for more, so
+> the write it needs to push has to be granted *there*. Leave it out and
+> the run fails as a `startup_failure` — no job, no step, no log to read —
+> on any repository whose default workflow token is read, which is the
+> default for everything created since February 2023. (Fixed in 0.5.1;
+> earlier tags declared the write inside the workflow, where it acted as a
+> ceiling check and failed the same way, with nothing you could add on
+> your side to satisfy it.)
+>
+> Under [`commit: false`](#owning-the-commit-deploy-first-commit-after)
+> nothing in the sync job pushes, so grant it nothing — the write belongs
+> on whichever job of yours does the committing.
 
 Prefer to own it? `npx gcal-sync --config gcal.config.json` is the whole
 job; run it from a workflow of your own.
@@ -885,7 +901,8 @@ knows, so your pipeline can decide for itself:
 ```yaml
 jobs:
   sync:
-    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.0
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.1
+    permissions: { contents: write }
     with:     { config: gcal.config.json }
     secrets:  { api-key: ${{ secrets.GCAL_API_KEY }} }
 
@@ -931,7 +948,10 @@ commit yourself, once the thing is actually live:
 ```yaml
 jobs:
   sync:
-    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.0
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.1
+    # No permissions block: this job fetches and decides, and never
+    # pushes. Don't hand a write token to a job that talks to the
+    # open internet when it has nothing to write.
     with:
       config: gcal.config.json
       commit: false
@@ -1131,7 +1151,9 @@ on:
 
 jobs:
   sync:
-    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.0
+    uses: copperdesign/gCal/.github/workflows/sync.yml@v0.5.1
+    permissions:
+      contents: write
     with:
       config: gcal.config.json
     secrets:
